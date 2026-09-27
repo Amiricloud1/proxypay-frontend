@@ -78,7 +78,7 @@ export default function RedocViewer({
   const [error, setError] = useState<string | null>(null);
   const [loadedSpec, setLoadedSpec] = useState<OpenAPISpec | null>(spec || null);
   const hashChangeUnsubscribeRef = useRef<(() => void) | null>(null);
-  const { messages, success, error: showError } = useToast();
+  const { messages, success, error: showError, dismiss } = useToast();
   const copyButtonRef = useRef<HTMLDivElement>(null);
   // Fix #356: remember the colours Redoc was last initialised with so a theme
   // change can be detected and the viewer re-initialised.
@@ -402,7 +402,7 @@ export default function RedocViewer({
    */
   return (
     <div className={styles.redocContainer}>
-      <Toast messages={messages} />
+      <Toast messages={messages} onDismiss={dismiss} />
       {enableAnchorCopy && window.location.hash && (
         <div className={styles.copyButtonContainer} ref={copyButtonRef}>
           <button
