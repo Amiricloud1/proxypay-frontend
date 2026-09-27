@@ -13,6 +13,7 @@
 import React, { useState } from 'react';
 import { AnalyticsResult } from '../analytics/analytics-engine';
 import { ReportGenerator, ExportOptions, BatchExportItem } from '../analytics/report-generator';
+import { sanitizeInput } from '../utils/sanitize';
 
 export interface FilterState {
   startDate: string;
@@ -145,9 +146,11 @@ export const ExportControls: React.FC<ExportControlsProps> = ({
   };
 
   const updateDateRange = (index: number, key: 'startDate' | 'endDate', value: string) => {
+    // Sanitize date inputs before storing (#448)
+    const safeValue = sanitizeInput(value);
     setDateRanges((ranges) =>
       ranges.map((range, rangeIndex) =>
-        rangeIndex === index ? { ...range, [key]: value } : range
+        rangeIndex === index ? { ...range, [key]: safeValue } : range
       )
     );
   };

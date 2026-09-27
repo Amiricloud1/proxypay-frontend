@@ -5,6 +5,7 @@ import { TransactionDrawer } from './components/TransactionDrawer'
 import { ExportButton } from './components/ExportButton'
 import { NotificationSettings } from './components/NotificationSettings'
 import { DuplicateReview } from './components/DuplicateReview'
+import { ToastNotifications } from './components/ToastNotifications'
 import { Transaction } from './services/api'
 import { TransactionMergeResult } from './services/duplicateDetection'
 import './App.css'
@@ -47,6 +48,9 @@ export default function App() {
 
   return (
     <div className="app">
+      {/* Global toast notifications — Issue #447 */}
+      <ToastNotifications />
+
       {/* Header Navigation */}
       <header className="app-header">
         <div className="header-content">

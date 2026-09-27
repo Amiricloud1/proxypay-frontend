@@ -10,6 +10,7 @@ import {
   TransactionPreviewPosition,
   TransactionRowPreview,
 } from './TransactionRowPreview'
+import { ProviderFilter, Provider } from './ProviderFilter'
 import '../styles/TransactionsTable.css'
 
 interface SortState {
@@ -56,6 +57,8 @@ export const TransactionsTable: React.FC<{
   } = useTransactionStore()
   const [sort, setSort] = useState<SortState>({ column: null, direction: 'asc' })
   const [preview, setPreview] = useState<PreviewState | null>(null)
+  /** #495 — Multi-select provider filter state (persisted in component state) */
+  const [selectedProviders, setSelectedProviders] = useState<Provider[]>([])
   const previewTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const touchTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const longPressTriggered = useRef(false)
@@ -166,6 +169,14 @@ export const TransactionsTable: React.FC<{
     return sort.direction === 'asc' ? result : -result
   })
 
+  /** #495 — Apply provider filter after sort */
+  const filteredTransactions =
+    selectedProviders.length === 0
+      ? sortedTransactions
+      : sortedTransactions.filter((tx) =>
+          selectedProviders.includes(tx.provider as Provider)
+        )
+
   const SortHeader: React.FC<{
     column: keyof Transaction
     label: string
@@ -193,6 +204,22 @@ export const TransactionsTable: React.FC<{
 
   return (
     <div className="transactions-table-container">
+      {/* #495 — Provider filter bar */}
+      <div className="transactions-table-toolbar" data-testid="transactions-toolbar">
+        <ProviderFilter
+          selectedProviders={selectedProviders}
+          transactions={transactions}
+          onChange={setSelectedProviders}
+        />
+        {selectedProviders.length > 0 && (
+          <span className="transactions-filter-summary" data-testid="filter-summary">
+            Showing{' '}
+            <strong>{filteredTransactions.length}</strong> of{' '}
+            <strong>{transactions.length}</strong> transactions
+          </span>
+        )}
+      </div>
+
       <table className="transactions-table">
         <thead>
           <tr>
@@ -205,14 +232,16 @@ export const TransactionsTable: React.FC<{
           </tr>
         </thead>
         <tbody>
-          {sortedTransactions.length === 0 ? (
+          {filteredTransactions.length === 0 ? (
             <tr>
               <td colSpan={6} className="empty-cell">
-                No transactions found
+                {selectedProviders.length > 0
+                  ? `No transactions found for selected provider${selectedProviders.length > 1 ? 's' : ''}`
+                  : 'No transactions found'}
               </td>
             </tr>
           ) : (
-            sortedTransactions.map((tx) => (
+            filteredTransactions.map((tx) => (
               <tr
                 key={tx.id}
                 onClick={() => {
