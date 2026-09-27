@@ -11,6 +11,7 @@ import {
   TransactionPreviewPosition,
   TransactionRowPreview,
 } from './TransactionRowPreview'
+import { ProviderFilter, Provider } from './ProviderFilter'
 import '../styles/TransactionsTable.css'
 
 interface SortState {
@@ -74,11 +75,8 @@ export const TransactionsTable: React.FC<{
   } = useTransactionStore()
   const [sort, setSort] = useState<SortState>({ column: null, direction: 'asc' })
   const [preview, setPreview] = useState<PreviewState | null>(null)
-  const [activeRowIndex, setActiveRowIndex] = useState(0)
-  const [announcement, setAnnouncement] = useState('')
-  const virtuosoRef = useRef<TableVirtuosoHandle>(null)
-  const pendingFocusIndex = useRef<number | null>(null)
-  const previousFilters = useRef(filters)
+  /** #495 — Multi-select provider filter state (persisted in component state) */
+  const [selectedProviders, setSelectedProviders] = useState<Provider[]>([])
   const previewTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const touchTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const longPressTriggered = useRef(false)
@@ -234,6 +232,14 @@ export const TransactionsTable: React.FC<{
     }
   }, [sortedTransactions.length])
 
+  /** #495 — Apply provider filter after sort */
+  const filteredTransactions =
+    selectedProviders.length === 0
+      ? sortedTransactions
+      : sortedTransactions.filter((tx) =>
+          selectedProviders.includes(tx.provider as Provider)
+        )
+
   const SortHeader: React.FC<{
     column: keyof Transaction
     label: string
@@ -331,15 +337,96 @@ export const TransactionsTable: React.FC<{
   }
 
   return (
-    <>
-      <div className="transactions-table-container">
-        {sortedTransactions.length === 0 ? (
-          <table className="transactions-table">
-            <thead>{renderTableHeader()}</thead>
-            <tbody>
-              <tr>
-                <td colSpan={6} className="empty-cell">
-                  No transactions found
+    <div className="transactions-table-container">
+      {/* #495 — Provider filter bar */}
+      <div className="transactions-table-toolbar" data-testid="transactions-toolbar">
+        <ProviderFilter
+          selectedProviders={selectedProviders}
+          transactions={transactions}
+          onChange={setSelectedProviders}
+        />
+        {selectedProviders.length > 0 && (
+          <span className="transactions-filter-summary" data-testid="filter-summary">
+            Showing{' '}
+            <strong>{filteredTransactions.length}</strong> of{' '}
+            <strong>{transactions.length}</strong> transactions
+          </span>
+        )}
+      </div>
+
+      <table className="transactions-table">
+        <thead>
+          <tr>
+            <SortHeader column="reference" label="Reference" />
+            <SortHeader column="amount" label="Amount" />
+            <SortHeader column="status" label="Status" />
+            <SortHeader column="provider" label="Provider" />
+            <SortHeader column="timestamp" label="Date" />
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {filteredTransactions.length === 0 ? (
+            <tr>
+              <td colSpan={6} className="empty-cell">
+                {selectedProviders.length > 0
+                  ? `No transactions found for selected provider${selectedProviders.length > 1 ? 's' : ''}`
+                  : 'No transactions found'}
+              </td>
+            </tr>
+          ) : (
+            filteredTransactions.map((tx) => (
+              <tr
+                key={tx.id}
+                onClick={() => {
+                  if (longPressTriggered.current) {
+                    longPressTriggered.current = false
+                    return
+                  }
+                  onRowClick(tx)
+                }}
+                onMouseEnter={(event) => schedulePreview(tx, event.currentTarget)}
+                onMouseLeave={hidePreview}
+                onFocus={(event) => schedulePreview(tx, event.currentTarget)}
+                onBlur={hidePreview}
+                onKeyDown={(event) => handleKeyDown(event, tx)}
+                onTouchStart={(event) => handleTouchStart(event, tx)}
+                onTouchEnd={handleTouchEnd}
+                onTouchCancel={handleTouchEnd}
+                onTouchMove={handleTouchEnd}
+                onContextMenu={(event) => {
+                  if (longPressTriggered.current) event.preventDefault()
+                }}
+                tabIndex={0}
+                aria-label={`View transaction ${tx.reference}, $${tx.amount.toFixed(2)}, ${tx.status}, ${tx.provider}`}
+                aria-describedby={
+                  preview?.transaction.id === tx.id
+                    ? 'transaction-row-preview'
+                    : undefined
+                }
+                data-testid={`transaction-row-${tx.id}`}
+                className="transaction-row"
+              >
+                <td>{tx.reference}</td>
+                <td className="amount">${tx.amount.toFixed(2)}</td>
+                <td>
+                  <span className={`status-badge status-${tx.status}`}>
+                    {tx.status}
+                  </span>
+                </td>
+                <td>{tx.provider}</td>
+                <td>{format(new Date(tx.timestamp), 'MMM dd, yyyy')}</td>
+                <td className="action-cell">
+                  <button
+                    className="view-button"
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      hidePreview()
+                      onRowClick(tx)
+                    }}
+                  >
+                    View Details
+                  </button>
                 </td>
               </tr>
             </tbody>

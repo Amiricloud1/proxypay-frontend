@@ -59,7 +59,10 @@ export interface TransactionFilters {
   dateFrom?: string
   dateTo?: string
   status?: string
+  /** Single provider (legacy, kept for API compat) */
   provider?: string
+  /** Multi-select providers for UI filtering (#495) */
+  providers?: Array<'vodafone' | 'mtn' | 'airtel'>
   limit?: number
   offset?: number
 }
