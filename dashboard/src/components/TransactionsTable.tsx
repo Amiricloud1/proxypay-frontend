@@ -3,6 +3,7 @@ import { format } from 'date-fns'
 import { ChevronDown, ChevronUp } from 'lucide-react'
 import { TableVirtuoso, type TableVirtuosoHandle } from 'react-virtuoso'
 import { useTransactionStore } from '../stores/transactionStore'
+import { trackFeatureFlagEvaluation, useFeatureFlagStore } from '../stores/featureFlagStore'
 import { Transaction } from '../services/api'
 import { TransactionTableSkeleton } from './TransactionTableSkeleton'
 import {
@@ -72,7 +73,11 @@ export const TransactionsTable: React.FC<{
     error,
     fetchTransactions,
     filters,
+    setFilters,
   } = useTransactionStore()
+  const showRowPreview = useFeatureFlagStore(
+    (state) => state.isEnabled('transaction-row-preview')
+  )
   const [sort, setSort] = useState<SortState>({ column: null, direction: 'asc' })
   const [preview, setPreview] = useState<PreviewState | null>(null)
   /** #495 — Multi-select provider filter state (persisted in component state) */
@@ -80,12 +85,19 @@ export const TransactionsTable: React.FC<{
   const previewTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const touchTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const longPressTriggered = useRef(false)
+  const skipInitialFetch = useRef(!loadOnMount)
 
   useEffect(() => {
-    if (loadOnMount) {
-      void fetchTransactions(filters || {})
+    if (skipInitialFetch.current) {
+      skipInitialFetch.current = false
+      return
     }
-  }, [fetchTransactions, filters, loadOnMount])
+    void fetchTransactions(filters || {})
+  }, [fetchTransactions, filters])
+
+  useEffect(() => {
+    trackFeatureFlagEvaluation('transaction-row-preview')
+  }, [showRowPreview])
 
   useEffect(() => {
     if (loading || error) return
@@ -139,6 +151,15 @@ export const TransactionsTable: React.FC<{
       direction:
         prev.column === column && prev.direction === 'asc' ? 'desc' : 'asc',
     }))
+  }
+
+  const pageSize = filters.limit || 50
+  const pageOffset = filters.offset || 0
+  const pageCount = Math.max(1, Math.ceil(total / pageSize))
+  const currentPage = Math.floor(pageOffset / pageSize) + 1
+
+  const changePage = (page: number) => {
+    setFilters({ offset: (page - 1) * pageSize })
   }
 
   const handleKeyDown = (
@@ -385,9 +406,9 @@ export const TransactionsTable: React.FC<{
                   }
                   onRowClick(tx)
                 }}
-                onMouseEnter={(event) => schedulePreview(tx, event.currentTarget)}
+                onMouseEnter={(event) => showRowPreview && schedulePreview(tx, event.currentTarget)}
                 onMouseLeave={hidePreview}
-                onFocus={(event) => schedulePreview(tx, event.currentTarget)}
+                onFocus={(event) => showRowPreview && schedulePreview(tx, event.currentTarget)}
                 onBlur={hidePreview}
                 onKeyDown={(event) => handleKeyDown(event, tx)}
                 onTouchStart={(event) => handleTouchStart(event, tx)}
