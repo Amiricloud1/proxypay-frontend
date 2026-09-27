@@ -8,6 +8,7 @@ import { NotificationSettings } from './components/NotificationSettings'
 import { FeatureFlagSettings } from './components/FeatureFlagSettings'
 import { PerformanceDashboard } from './components/PerformanceDashboard'
 import { DuplicateReview } from './components/DuplicateReview'
+import { ToastNotifications } from './components/ToastNotifications'
 import { Transaction } from './services/api'
 import { recordPerformanceMetric, startPerformanceMonitoring } from './services/performance'
 import { TransactionMergeResult } from './services/duplicateDetection'
@@ -61,6 +62,9 @@ export default function App() {
 
   return (
     <div className="app">
+      {/* Global toast notifications — Issue #447 */}
+      <ToastNotifications />
+
       {/* Header Navigation */}
       <header className="app-header">
         <div className="header-content">

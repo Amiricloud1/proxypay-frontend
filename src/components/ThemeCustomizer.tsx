@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { validateContrast, suggestColors } from '../utils/contrastValidator';
+import { sanitizeInput, sanitizeColor } from '../utils/sanitize';
 
 type ThemePalette = {
   primary: string;
@@ -377,46 +378,52 @@ export default function ThemeCustomizer(): React.JSX.Element {
   };
 
   const updateCustomField = (field: keyof ThemeDefinition, value: string | number) => {
+    // Sanitize string fields to prevent XSS in stored theme data (#448)
+    const safeValue = typeof value === 'string' ? sanitizeInput(value) : value;
     setCustomTheme((current) => ({
       ...current,
-      [field]: value,
+      [field]: safeValue,
     } as ThemeDefinition));
     setPreviewTheme((current) => ({
       ...current,
-      [field]: value,
+      [field]: safeValue,
     } as ThemeDefinition));
   };
 
   const updatePaletteField = (field: keyof ThemePalette, value: string) => {
+    // Only accept valid hex colors from the color picker (#448)
+    const safeColor = sanitizeColor(value) || value;
     setCustomTheme((current) => ({
       ...current,
       palette: {
         ...current.palette,
-        [field]: value,
+        [field]: safeColor,
       },
     }));
     setPreviewTheme((current) => ({
       ...current,
       palette: {
         ...current.palette,
-        [field]: value,
+        [field]: safeColor,
       },
     }));
   };
 
   const updateDarkPaletteField = (field: keyof ThemePalette, value: string) => {
+    // Only accept valid hex colors from the color picker (#448)
+    const safeColor = sanitizeColor(value) || value;
     setCustomTheme((current) => ({
       ...current,
       darkPalette: {
         ...(current.darkPalette || current.palette),
-        [field]: value,
+        [field]: safeColor,
       },
     }));
     setPreviewTheme((current) => ({
       ...current,
       darkPalette: {
         ...(current.darkPalette || current.palette),
-        [field]: value,
+        [field]: safeColor,
       },
     }));
   };
