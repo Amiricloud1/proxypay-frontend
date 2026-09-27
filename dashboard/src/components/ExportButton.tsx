@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react'
 import { CalendarPlus, Download, Loader } from 'lucide-react'
 import { useTransactionStore } from '../stores/transactionStore'
 import { useExportScheduleStore } from '../stores/exportScheduleStore'
+import { useToastStore } from '../stores/toastStore'
 import { CSVExporter } from '../services/csv'
 import { ExportScheduleDialog } from './ExportScheduleDialog'
 import '../styles/ExportButton.css'
@@ -11,6 +12,7 @@ export const ExportButton: React.FC = () => {
   const setCompletionNotification = useExportScheduleStore(
     (state) => state.setCompletionNotification
   )
+  const { success: toastSuccess, error: toastError, warning: toastWarning } = useToastStore()
   const [exporting, setExporting] = useState(false)
   const [progress, setProgress] = useState(0)
   const [includeAudit, setIncludeAudit] = useState(false)
@@ -36,7 +38,7 @@ export const ExportButton: React.FC = () => {
 
   const handleExport = async () => {
     if (transactions.length === 0) {
-      alert('No transactions to export')
+      toastWarning('No transactions to export')
       return
     }
 
@@ -61,6 +63,7 @@ export const ExportButton: React.FC = () => {
 
       setProgress(100)
       setShowOptions(false)
+      toastSuccess(`Exported ${transactions.length} transaction${transactions.length !== 1 ? 's' : ''} successfully`)
 
       setTimeout(() => {
         setExporting(false)
@@ -68,7 +71,7 @@ export const ExportButton: React.FC = () => {
       }, 1500)
     } catch (error) {
       console.error('Export failed:', error)
-      alert('Failed to export transactions')
+      toastError('Failed to export transactions. Please try again.')
       setExporting(false)
       setProgress(0)
     }
