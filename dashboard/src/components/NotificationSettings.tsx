@@ -68,7 +68,7 @@ export const NotificationSettings: React.FC = () => {
       </section>
 
       {error && (
-        <div className="alert alert-error">
+        <div className="alert alert-error" role="alert" aria-live="assertive">
           <AlertCircle size={18} />
           <span>{error}</span>
           <button onClick={clearError}>Dismiss</button>
@@ -119,6 +119,7 @@ export const NotificationSettings: React.FC = () => {
                     <label className="toggle-label">
                       <input
                         type="checkbox"
+                        aria-label={`Email notifications for ${formatEventType(setting.eventType)}`}
                         checked={setting.emailEnabled}
                         onChange={() =>
                           handleToggle(setting.eventType, 'email', setting.emailEnabled)
@@ -138,6 +139,7 @@ export const NotificationSettings: React.FC = () => {
                     <label className="toggle-label">
                       <input
                         type="checkbox"
+                        aria-label={`Webhook notifications for ${formatEventType(setting.eventType)}`}
                         checked={setting.webhookEnabled}
                         onChange={() =>
                           handleToggle(

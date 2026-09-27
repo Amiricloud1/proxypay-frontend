@@ -1,5 +1,5 @@
 import axios, { AxiosInstance } from 'axios'
-import { inspectCorsHeaders } from './security'
+import { recordPerformanceMetric } from './performance'
 
 export type TransactionStatus =
   | 'pending'
@@ -60,7 +60,10 @@ export interface TransactionFilters {
   dateFrom?: string
   dateTo?: string
   status?: string
+  /** Single provider (legacy, kept for API compat) */
   provider?: string
+  /** Multi-select providers for UI filtering (#495) */
+  providers?: Array<'vodafone' | 'mtn' | 'airtel'>
   limit?: number
   offset?: number
 }
@@ -163,30 +166,40 @@ class ProxyPayAPI {
       },
     })
 
+    const token = localStorage.getItem('auth_token')
+    if (token) {
+      this.client.defaults.headers.common['Authorization'] = `Bearer ${token}`
+    }
+
+    const requestStartedAt = new WeakMap<object, number>()
+    const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now())
+    const recordResponseTime = (config?: object & { url?: string; method?: string }) => {
+      if (!config) return
+      const startedAt = requestStartedAt.get(config)
+      if (startedAt === undefined) return
+      requestStartedAt.delete(config)
+      recordPerformanceMetric('api-response', now() - startedAt, {
+        endpoint: config.url || 'unknown',
+        method: (config.method || 'get').toUpperCase(),
+      })
+    }
+
     this.client.interceptors.request.use((config) => {
-      if (this.authToken) config.headers.Authorization = `Bearer ${this.authToken}`
+      requestStartedAt.set(config, now())
       return config
     })
-    this.client.interceptors.response.use((response) => {
-      if (typeof window !== 'undefined') {
-        const baseUrl = new URL(response.config.baseURL || window.location.origin, window.location.origin)
-        const url = new URL(response.config.url || '', baseUrl)
-        if (url.origin !== window.location.origin) {
-          inspectCorsHeaders(
-            {
-              'access-control-allow-origin': response.headers['access-control-allow-origin'],
-              'access-control-allow-credentials': response.headers['access-control-allow-credentials'],
-            },
-            window.location.origin
-          )
+    this.client.interceptors.response.use(
+      (response) => {
+        recordResponseTime(response.config)
+        return response
+      },
+      (error: unknown) => {
+        if (error && typeof error === 'object' && 'config' in error) {
+          recordResponseTime((error as { config?: object }).config)
         }
+        return Promise.reject(error)
       }
-      return response
-    })
-  }
-
-  setAuthToken(token: string | null): void {
-    this.authToken = token?.trim() || null
+    )
   }
 
   private unwrap<T>(payload: ApiPayload<T>): T {
