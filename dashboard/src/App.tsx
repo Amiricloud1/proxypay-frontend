@@ -1,4 +1,4 @@
-import { Profiler, useState, useEffect } from 'react'
+import { Profiler, useState, useEffect, useRef } from 'react'
 import { useTransactionStore } from './stores/transactionStore'
 import { useFeatureFlagStore } from './stores/featureFlagStore'
 import { TransactionsTable } from './components/TransactionsTable'
@@ -10,6 +10,9 @@ import { canAccess } from './auth/access'
 import './App.css'
 
 type Page = 'transactions' | 'reconciliation' | 'settings'
+
+// Issue #717: reasonable timeout for in-flight detail requests (ms)
+const REQUEST_TIMEOUT_MS = 15000
 
 export default function App() {
   const [currentPage, setCurrentPage] = useState<Page>('transactions')
@@ -26,19 +29,61 @@ export default function App() {
   const [fullPageTransaction, setFullPageTransaction] = useState(false)
   const canManageNotifications = canAccess('notification-settings')
 
+  // Issue #717: track the in-flight detail request so it can be cancelled
+  const detailAbortRef = useRef<AbortController | null>(null)
+  const detailTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const clearDetailRequest = () => {
+    if (detailTimeoutRef.current) {
+      clearTimeout(detailTimeoutRef.current)
+      detailTimeoutRef.current = null
+    }
+    detailAbortRef.current = null
+  }
+
+  const cancelDetailRequest = () => {
+    if (detailAbortRef.current) {
+      detailAbortRef.current.abort()
+    }
+    clearDetailRequest()
+  }
+
   // Initialize transactions on mount
   useEffect(() => {
     fetchTransactions(filters)
   }, [])
 
+  // Issue #717: abort any in-flight request on unmount
+  useEffect(() => {
+    return () => {
+      cancelDetailRequest()
+    }
+  }, [])
+
   const handleRowClick = (tx: Transaction) => {
+    // Cancel any previous in-flight request before starting a new one
+    cancelDetailRequest()
+
+    const controller = new AbortController()
+    detailAbortRef.current = controller
+    detailTimeoutRef.current = setTimeout(() => {
+      controller.abort()
+    }, REQUEST_TIMEOUT_MS)
+
     setSelectedTransaction(tx)
     setFullPageTransaction(false)
     setDrawerOpen(true)
-    void fetchTransactionDetail(tx.id)
+    void fetchTransactionDetail(tx.id, { signal: controller.signal }).finally(() => {
+      clearDetailRequest()
+    })
+  }
+
+  const handleCancelRequest = () => {
+    cancelDetailRequest()
   }
 
   const handleDrawerClose = () => {
+    cancelDetailRequest()
     setDrawerOpen(false)
     setFullPageTransaction(false)
     setTimeout(() => setSelectedTransaction(null), 300) // Delay to allow animation
@@ -90,18 +135,16 @@ export default function App() {
               <TransactionsTable onRowClick={handleRowClick} loadOnMount={false} />
               <DuplicateReview transactions={transactions} onMerged={handleMerged} />
             </div>
-            <TransactionsTable onRowClick={handleRowClick} loadOnMount={false} />
-            <DuplicateReview transactions={transactions} onMerged={handleMerged} />
-          </div>
-        ) : currentPage === 'reconciliation' ? (
-          <div className="reconciliation-page">
-            <ReconciliationTab />
-          </div>
-        ) : canManageNotifications ? (
-          <div className="settings-page">
-            <NotificationSettings />
-          </div>
-        ) : null}
+          ) : currentPage === 'reconciliation' ? (
+            <div className="reconciliation-page">
+              <ReconciliationTab />
+            </div>
+          ) : canManageNotifications ? (
+            <div className="settings-page">
+              <NotificationSettings />
+            </div>
+          ) : null}
+        </Profiler>
       </main>
 
       {/* Transaction Detail Drawer */}
@@ -111,6 +154,7 @@ export default function App() {
         loading={detailLoading}
         error={detailError}
         onClose={handleDrawerClose}
+        onCancel={handleCancelRequest}
         fullPage={fullPageTransaction}
         onOpenFullPage={() => setFullPageTransaction(true)}
       />
