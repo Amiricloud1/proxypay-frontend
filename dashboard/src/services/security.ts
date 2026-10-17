@@ -46,6 +46,47 @@ export function sanitizeErrorMessage(error: unknown, secret?: string): string {
   return secret ? sanitized.split(secret).join('[REDACTED]') : sanitized
 }
 
+/**
+ * Authorization headers are secrets. Keep them out of persisted request
+ * history and out of URLs/query strings so they cannot be shoulder-surfed
+ * or accidentally copied.
+ */
+export function redactAuthorizationForHistory(
+  headers: Record<string, string> | undefined
+): Record<string, string> {
+  if (!headers) return {}
+  return Object.fromEntries(
+    Object.entries(headers).map(([name, value]) =>
+      name.toLowerCase() === 'authorization' ? [name, '[REDACTED]'] : [name, value]
+    )
+  )
+}
+
+/**
+ * Strip any authorization value that may have leaked into a URL or query
+ * string before it is displayed, copied, or persisted.
+ */
+export function stripAuthorizationFromUrl(value: string): string {
+  try {
+    const url = new URL(value, 'http://localhost')
+    let changed = false
+    for (const key of Array.from(url.searchParams.keys())) {
+      if (/^(authorization|auth|token|api[_-]?key)$/i.test(key)) {
+        url.searchParams.delete(key)
+        changed = true
+      }
+    }
+    if (url.username || url.password) {
+      url.username = ''
+      url.password = ''
+      changed = true
+    }
+    return changed ? url.toString() : value
+  } catch {
+    return value
+  }
+}
+
 export function getCorsDiagnostic(): CorsDiagnostic | null {
   return lastCorsDiagnostic
 }
