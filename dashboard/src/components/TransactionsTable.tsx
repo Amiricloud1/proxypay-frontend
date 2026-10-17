@@ -34,6 +34,43 @@ type NormalizedSortValue =
 const DATE_LIKE = /^\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?$/
 
 /**
+ * #727 — Parse a transaction timestamp defensively.
+ *
+ * Returns the epoch milliseconds for a valid timestamp, or `null` for
+ * missing/invalid values. Date-only strings (e.g. `2024-01-15`) are
+ * interpreted as UTC midnight so filtering is consistent across browser time
+ * zones; strings with an explicit offset (`Z`, `+hh:mm`, `-hh:mm`) are honored
+ * as-is. This is the single normalization point used before any date-range
+ * comparison.
+ */
+const parseTimestamp = (raw: unknown): number | null => {
+  if (raw === null || raw === undefined) return null
+
+  if (raw instanceof Date) {
+    const time = raw.getTime()
+    return Number.isNaN(time) ? null : time
+  }
+
+  if (typeof raw === 'number') {
+    return Number.isFinite(raw) ? raw : null
+  }
+
+  if (typeof raw !== 'string') return null
+
+  const trimmed = raw.trim()
+  if (trimmed === '') return null
+
+  // Date-only strings are treated as UTC midnight for cross-timezone stability.
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    const time = Date.parse(`${trimmed}T00:00:00Z`)
+    return Number.isNaN(time) ? null : time
+  }
+
+  const time = Date.parse(trimmed)
+  return Number.isNaN(time) ? null : time
+}
+
+/**
  * #726 — Normalize a raw transaction field into a comparable value.
  * Numbers (and numeric strings) compare numerically, date-like strings compare
  * by timestamp, everything else compares as a lowercased string. Empty,
@@ -51,8 +88,8 @@ const normalizeSortValue = (raw: unknown): NormalizedSortValue => {
     if (trimmed === '') return null
 
     if (DATE_LIKE.test(trimmed)) {
-      const time = Date.parse(trimmed)
-      return Number.isNaN(time) ? null : { kind: 'date', value: time }
+      const time = parseTimestamp(trimmed)
+      return time === null ? null : { kind: 'date', value: time }
     }
 
     // Numeric strings (e.g. amounts serialized as strings) sort numerically.
@@ -228,81 +265,4 @@ export const TransactionsTable: React.FC<{
       if (changed) resetPagination()
       return statuses
     })
-  }, [resetPagination])
-
-  const handleProvidersChange = useCallback((providers: Provider[]) => {
-    setSelectedProviders((prev) => {
-      const changed =
-        prev.length !== providers.length ||
-        prev.some((provider, i) => provider !== providers[i])
-      if (changed) resetPagination()
-      return providers
-    })
-  }, [resetPagination])
-
-  // ── Composed filtering + sorting (AND logic) ─────────────────────────────────
-  const filteredAndSorted = useMemo(() => {
-    const filtered = (transactions ?? []).filter(
-      (tx) =>
-        matchesSearch(tx, searchQuery) &&
-        matchesDateRange(tx, dateRange) &&
-        matchesStatus(tx, selectedStatuses)
-    )
-
-    if (!sort.column) return filtered
-
-    const col = sort.column as keyof Transaction
-    const direction = sort.direction === 'asc' ? 1 : -1
-
-    // #726 — Decorate with normalized values + original index so equal values
-    // tie-break on stable input order (deterministic across renders/browsers).
-    return filtered
-      .map((tx, index) => ({
-        tx,
-        index,
-        value: normalizeSortValue(tx[col]),
-      }))
-      .sort((a, b) => {
-        const result = compareNormalized(a.value, b.value)
-        // Missing values always last, regardless of direction.
-        if (a.value === null || b.value === null) {
-          if (result !== 0) return result
-        } else if (result !== 0) {
-          return result * direction
-        }
-        return a.index - b.index
-      })
-      .map((entry) => entry.tx)
-  }, [transactions, searchQuery, dateRange, selectedStatuses, sort])
-
-  const totalCount = (transactions ?? []).length
-
-  // ── #725 — Error state with accessible retry action ────────────────────────
-  // Only shown when there are no rows to preserve; if rows exist we keep the
-  // table visible and surface the retry inline instead of blanking it.
-  const renderErrorState = () => (
-    <div className="transactions-error" role="alert" aria-live="assertive">
-      <p className="transactions-error__message">
-        {error || 'Failed to load transactions.'}
-      </p>
-      <button
-        type="button"
-        className="transactions-error__retry"
-        onClick={handleRetry}
-        disabled={retrying}
-        aria-busy={retrying}
-      >
-        <RefreshCw
-          size={16}
-          className={retrying ? 'transactions-error__retry-icon spinning' : 'transactions-error__retry-icon'}
-          aria-hidden="true"
-        />
-        {retrying ? 'Retrying…' : 'Retry'}
-      </button>
-    </div>
-  )
-
-  // ── SortHeader sub-component ─────────────────────────────────────────────────
-  
-
-/* … truncated 1865 chars — edit only what you need near the top … */
+  }, [
