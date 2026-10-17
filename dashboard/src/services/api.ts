@@ -367,6 +367,11 @@ class ProxyPayAPI {
     await this.client.patch(`/notifications/${encodeURIComponent(id)}`, { read: true })
   }
 
+  async markNotificationsRead(ids: string[]): Promise<DashboardNotification[]> {
+    const { data } = await this.client.patch('/notifications/bulk/read', { ids })
+    return data.notifications ?? data
+  }
+
   // Health check
   async healthCheck(): Promise<boolean> {
     try {

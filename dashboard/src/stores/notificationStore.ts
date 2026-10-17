@@ -18,6 +18,9 @@ interface NotificationStore {
   optimisticUpdates: Map<string, NotificationSettings>
   notifications: DashboardNotification[]
   notificationsLoading: boolean
+  bulkReadInProgress: Set<string>
+  pastChanges: NotificationChange[]
+  futureChanges: NotificationChange[]
 
   // Actions
   fetchSettings: () => Promise<void>
@@ -31,6 +34,7 @@ interface NotificationStore {
   clearError: () => void
   fetchNotifications: () => Promise<void>
   markNotificationRead: (id: string) => Promise<void>
+  bulkMarkRead: (ids: string[]) => Promise<void>
 }
 
 const MAX_HISTORY_SIZE = 20
@@ -42,6 +46,9 @@ export const useNotificationStore = create<NotificationStore>((set, get) => ({
   optimisticUpdates: new Map(),
   notifications: [],
   notificationsLoading: false,
+  bulkReadInProgress: new Set(),
+  pastChanges: [],
+  futureChanges: [],
 
   fetchSettings: async () => {
     set({ loading: true, error: null })
@@ -159,7 +166,61 @@ export const useNotificationStore = create<NotificationStore>((set, get) => ({
     }
   },
 
+  bulkMarkRead: async (ids: string[]) => {
+    if (ids.length === 0) return
+
+    const state = get()
+    
+    // Store previous state for rollback
+    const previousNotifications = state.notifications
+    const bulkReadInProgress = new Set(state.bulkReadInProgress)
+    ids.forEach(id => bulkReadInProgress.add(id))
+
+    // Optimistic update - mark all as read atomically
+    const optimisticNotifications = previousNotifications.map((notification) =>
+      ids.includes(notification.id) ? { ...notification, read: true } : notification
+    )
+
+    set({
+      notifications: optimisticNotifications,
+      bulkReadInProgress,
+      error: null,
+    })
+
+    try {
+      // Attempt API call - server returns updated notifications for atomic confirmation
+      const updatedNotifications = await proxyPayAPI.markNotificationsRead(ids)
+      
+      bulkReadInProgress.forEach(id => bulkReadInProgress.delete(id))
+
+      set({
+        notifications: updatedNotifications,
+        bulkReadInProgress,
+      })
+    } catch (error) {
+      // Rollback on failure - restore previous state atomically
+      bulkReadInProgress.forEach(id => bulkReadInProgress.delete(id))
+
+      set({
+        notifications: previousNotifications,
+        bulkReadInProgress,
+        error:
+          error instanceof Error
+            ? `Failed to mark notifications as read: ${error.message}`
+            : 'Failed to mark notifications as read',
+      })
+    }
+  },
+
   clearError: () => {
     set({ error: null })
+  },
+
+  undo: async () => {
+    // Placeholder for future undo functionality
+  },
+
+  redo: async () => {
+    // Placeholder for future redo functionality
   },
 }))
