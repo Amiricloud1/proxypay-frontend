@@ -11,6 +11,21 @@ import './App.css'
 
 type Page = 'transactions' | 'reconciliation' | 'settings'
 
+const PAGE_METADATA: Record<Page, { title: string; description: string }> = {
+  transactions: {
+    title: 'Transactions | ProxyPay Dashboard',
+    description: 'Review, export, and manage your ProxyPay transaction history.',
+  },
+  reconciliation: {
+    title: 'Reconciliation | ProxyPay Dashboard',
+    description: 'Reconcile ProxyPay transactions against your settlement records.',
+  },
+  settings: {
+    title: 'Notification Settings | ProxyPay Dashboard',
+    description: 'Configure how and when ProxyPay sends you notifications.',
+  },
+}
+
 export default function App() {
   const [currentPage, setCurrentPage] = useState<Page>('transactions')
   const {
@@ -30,6 +45,20 @@ export default function App() {
   useEffect(() => {
     fetchTransactions(filters)
   }, [])
+
+  // Keep document title and meta description in sync with the active route
+  useEffect(() => {
+    const { title, description } = PAGE_METADATA[currentPage]
+    document.title = title
+
+    let metaDescription = document.querySelector('meta[name="description"]')
+    if (!metaDescription) {
+      metaDescription = document.createElement('meta')
+      metaDescription.setAttribute('name', 'description')
+      document.head.appendChild(metaDescription)
+    }
+    metaDescription.setAttribute('content', description)
+  }, [currentPage])
 
   const handleRowClick = (tx: Transaction) => {
     setSelectedTransaction(tx)
