@@ -166,11 +166,31 @@ export interface DashboardNotification {
   actionUrl?: string
 }
 
+/**
+ * Resolve a root-relative path against the configured base URL so that
+ * local resources stay inside the deployed project path (e.g. GitHub Pages
+ * `/proxypay-frontend/`). Absolute URLs and already-prefixed paths are
+ * returned unchanged.
+ */
+export function resolveBaseUrl(path: string): string {
+  if (!path || /^([a-z][a-z0-9+.-]*:)?\/\//i.test(path)) {
+    return path
+  }
+  const baseUrl = (import.meta.env.BASE_URL || '/').replace(/\/$/, '')
+  if (!baseUrl) {
+    return path
+  }
+  if (path === baseUrl || path.startsWith(`${baseUrl}/`)) {
+    return path
+  }
+  return path.startsWith('/') ? `${baseUrl}${path}` : `${baseUrl}/${path}`
+}
+
 class ProxyPayAPI {
   private client: AxiosInstance
   private authToken: string | null = null
 
-  constructor(baseURL = '/api') {
+  constructor(baseURL = resolveBaseUrl('/api')) {
     this.client = axios.create({
       baseURL,
       withCredentials: true,
@@ -309,7 +329,7 @@ class ProxyPayAPI {
     id: string,
     schedule: Partial<CreateExportSchedule>
   ): Promise<ExportSchedule> {
-    const { data } = await this.client.patch(
+    const { data } = await this.client.put(
       `/transactions/exports/schedules/${encodeURIComponent(id)}`,
       schedule
     )
@@ -322,60 +342,39 @@ class ProxyPayAPI {
     )
   }
 
-  async getExportCompletionNotifications(): Promise<ExportCompletionNotification[]> {
-    const { data } = await this.client.get(
-      '/transactions/exports/notifications'
+  async runExportSchedule(id: string): Promise<ScheduledExport> {
+    const { data } = await this.client.post(
+      `/transactions/exports/schedules/${encodeURIComponent(id)}/run`
     )
-    return this.unwrap<ExportCompletionNotification[]>(data) || []
+    return this.unwrap<ScheduledExport>(data)
   }
 
-  async getNotificationSettings(): Promise<NotificationConfig> {
-    const { data } = await this.client.get('/notifications/settings')
-    return data
+  async getNotificationConfig(): Promise<NotificationConfig> {
+    const { data } = await this.client.get('/notifications/config')
+    return this.unwrap<NotificationConfig>(data)
   }
 
-  async updateNotificationSetting(
-    eventType: string,
-    emailEnabled: boolean,
-    webhookEnabled: boolean
-  ): Promise<NotificationSettings> {
-    const { data } = await this.client.put(
-      `/notifications/settings/${eventType}`,
-      {
-        emailEnabled,
-        webhookEnabled,
-      }
-    )
-    return data
-  }
-
-  async scheduleExport(options: {
-    includeAuditTrail: boolean
-    scheduledFor: string
-    filters?: TransactionFilters
-  }): Promise<ScheduledExport> {
-    const { data } = await this.client.post('/exports', options)
-    return data
+  async updateNotificationConfig(
+    config: NotificationConfig
+  ): Promise<NotificationConfig> {
+    const { data } = await this.client.put('/notifications/config', config)
+    return this.unwrap<NotificationConfig>(data)
   }
 
   async getNotifications(): Promise<DashboardNotification[]> {
     const { data } = await this.client.get('/notifications')
-    return data.notifications ?? data
+    return this.unwrap<DashboardNotification[]>(data) || []
   }
 
-  async markNotificationRead(id: string): Promise<void> {
-    await this.client.patch(`/notifications/${encodeURIComponent(id)}`, { read: true })
-  }
-
-  // Health check
-  async healthCheck(): Promise<boolean> {
-    try {
-      const { data } = await this.client.get('/health')
-      return data.status === 'ok'
-    } catch {
-      return false
-    }
+  async markNotificationRead(id: string): Promise<DashboardNotification> {
+    const { data } = await this.client.post(
+      `/notifications/${encodeURIComponent(id)}/read`
+    )
+    return this.unwrap<DashboardNotification>(data)
   }
 }
 
-export const proxyPayAPI = new ProxyPayAPI()
+type ApiPayload<T> = T | { data: T }
+
+export const api = new ProxyPayAPI()
+export default api
