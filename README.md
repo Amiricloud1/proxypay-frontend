@@ -63,3 +63,6 @@ this file or configuring an equivalent edge/CDN policy.
 
 <!-- handsoff-issue-701 -->
 - #701: Populate tag descriptions in the sidebar
+
+<!-- handsoff-issue-702 -->
+- #702: Support composed schemas in generated examples
