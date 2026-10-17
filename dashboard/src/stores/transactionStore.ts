@@ -25,6 +25,15 @@ const defaultFilters: TransactionFilters = {
   offset: 0,
 }
 
+// Filter keys that, when changed, invalidate the current pagination offset.
+const paginationResetKeys: (keyof TransactionFilters)[] = [
+  'search',
+  'status',
+  'startDate',
+  'endDate',
+  'provider',
+]
+
 let latestDetailRequest = 0
 let latestListRequest = 0
 
@@ -93,9 +102,20 @@ export const useTransactionStore = create<TransactionStore>((set) => ({
   },
 
   setFilters: (newFilters: Partial<TransactionFilters>) => {
-    set((state) => ({
-      filters: { ...state.filters, ...newFilters, offset: newFilters.offset ?? 0 },
-    }))
+    set((state) => {
+      const filterChanged = paginationResetKeys.some(
+        (key) => key in newFilters && newFilters[key] !== state.filters[key]
+      )
+
+      // Reset to the first page when a meaningful filter changes, unless the
+      // caller explicitly provides an offset (e.g. pagination navigation).
+      const offset =
+        newFilters.offset ?? (filterChanged ? 0 : state.filters.offset)
+
+      return {
+        filters: { ...state.filters, ...newFilters, offset },
+      }
+    })
   },
 
   resetFilters: () => {
