@@ -11,6 +11,26 @@ import './App.css'
 
 type Page = 'transactions' | 'reconciliation' | 'settings'
 
+// Issue #707: keep the selected transaction addressable via the URL so that
+// deep-linked selections survive search / deprecation filter changes.
+const SELECTED_TX_PARAM = 'tx'
+
+function readSelectedTxFromUrl(): string | null {
+  if (typeof window === 'undefined') return null
+  return new URLSearchParams(window.location.search).get(SELECTED_TX_PARAM)
+}
+
+function writeSelectedTxToUrl(id: string | null) {
+  if (typeof window === 'undefined') return null
+  const url = new URL(window.location.href)
+  if (id) {
+    url.searchParams.set(SELECTED_TX_PARAM, id)
+  } else {
+    url.searchParams.delete(SELECTED_TX_PARAM)
+  }
+  window.history.replaceState(window.history.state, '', url.toString())
+}
+
 export default function App() {
   const [currentPage, setCurrentPage] = useState<Page>('transactions')
   const {
@@ -30,6 +50,26 @@ export default function App() {
   useEffect(() => {
     fetchTransactions(filters)
   }, [])
+
+  // Issue #707: restore a deep-linked selection from the URL on mount.
+  useEffect(() => {
+    const txId = readSelectedTxFromUrl()
+    if (!txId) return
+    const match = transactions.find((tx) => tx.id === txId)
+    if (match) {
+      setSelectedTransaction(match)
+      setFullPageTransaction(false)
+      setDrawerOpen(true)
+      void fetchTransactionDetail(match.id)
+    } else {
+      void fetchTransactionDetail(txId)
+    }
+  }, [])
+
+  // Issue #707: keep the URL in sync with the current selection.
+  useEffect(() => {
+    writeSelectedTxToUrl(selectedTransaction?.id ?? null)
+  }, [selectedTransaction?.id])
 
   const handleRowClick = (tx: Transaction) => {
     setSelectedTransaction(tx)
