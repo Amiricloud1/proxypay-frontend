@@ -55,3 +55,8 @@ and Netlify). GitHub Pages does not apply `_headers` or allow custom response
 headers, so this policy is not enforced at runtime while the site remains on
 GitHub Pages. Runtime enforcement requires deploying to a host that consumes
 this file or configuring an equivalent edge/CDN policy.
+
+## Handsoff notes
+
+<!-- handsoff-issue-718 -->
+- #718: Add response body copy and download actions
