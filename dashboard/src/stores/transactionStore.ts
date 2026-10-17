@@ -5,6 +5,7 @@ interface TransactionStore {
   transactions: Transaction[]
   selectedTransaction: Transaction | null
   loading: boolean
+  retrying: boolean
   detailLoading: boolean
   error: string | null
   detailError: string | null
@@ -13,6 +14,7 @@ interface TransactionStore {
   
   // Actions
   fetchTransactions: (filters: TransactionFilters) => Promise<void>
+  retryTransactions: () => Promise<void>
   fetchTransactionDetail: (id: string) => Promise<void>
   setSelectedTransaction: (tx: Transaction | null) => void
   setFilters: (filters: Partial<TransactionFilters>) => void
@@ -37,10 +39,11 @@ const paginationResetKeys: (keyof TransactionFilters)[] = [
 let latestDetailRequest = 0
 let latestListRequest = 0
 
-export const useTransactionStore = create<TransactionStore>((set) => ({
+export const useTransactionStore = create<TransactionStore>((set, get) => ({
   transactions: [],
   selectedTransaction: null,
   loading: false,
+  retrying: false,
   detailLoading: false,
   error: null,
   detailError: null,
@@ -49,7 +52,7 @@ export const useTransactionStore = create<TransactionStore>((set) => ({
 
   fetchTransactions: async (filters: TransactionFilters) => {
     const requestId = ++latestListRequest
-    set({ loading: true, error: null })
+    set({ loading: true, retrying: false, error: null })
     try {
       const result = await proxyPayAPI.getTransactions(filters)
       if (requestId !== latestListRequest) return
@@ -64,6 +67,33 @@ export const useTransactionStore = create<TransactionStore>((set) => ({
       set({
         error: error instanceof Error ? error.message : 'Failed to fetch transactions',
         loading: false,
+      })
+    }
+  },
+
+  retryTransactions: async () => {
+    const { filters, transactions } = get()
+    const requestId = ++latestListRequest
+    // Distinguish retry loading from the initial skeleton: keep existing rows
+    // visible and only flag `retrying` when there is data already on screen.
+    set({ retrying: transactions.length > 0, loading: transactions.length === 0, error: null })
+    try {
+      const result = await proxyPayAPI.getTransactions(filters)
+      if (requestId !== latestListRequest) return
+      set({
+        transactions: result.data,
+        total: result.total,
+        filters,
+        loading: false,
+        retrying: false,
+      })
+    } catch (error) {
+      if (requestId !== latestListRequest) return
+      // Preserve existing rows when a retry fails and rows are already present.
+      set({
+        error: error instanceof Error ? error.message : 'Failed to fetch transactions',
+        loading: false,
+        retrying: false,
       })
     }
   },

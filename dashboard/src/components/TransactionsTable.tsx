@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { format } from 'date-fns'
-import { ChevronDown, ChevronUp } from 'lucide-react'
+import { ChevronDown, ChevronUp, RefreshCw } from 'lucide-react'
 import { TableVirtuoso, type TableVirtuosoHandle } from 'react-virtuoso'
 import { useTransactionStore } from '../stores/transactionStore'
 import { trackFeatureFlagEvaluation, useFeatureFlagStore } from '../stores/featureFlagStore'
@@ -67,6 +67,9 @@ export const TransactionsTable: React.FC<{
   const [preview, setPreview] = useState<PreviewState | null>(null)
   /** #495 — Multi-select provider filter state (persisted in component state) */
   const [selectedProviders, setSelectedProviders] = useState<Provider[]>([])
+  /** #725 — Tracks a retry triggered from the error state so we can show a
+   *  distinct "retrying" indicator instead of the initial skeleton. */
+  const [retrying, setRetrying] = useState(false)
   const previewTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const touchTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const longPressTriggered = useRef(false)
@@ -90,6 +93,29 @@ export const TransactionsTable: React.FC<{
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fetchTransactions])
+
+  // ── #725 — Retry the active filter request ─────────────────────────────────
+  const handleRetry = useCallback(async () => {
+    setRetrying(true)
+    try {
+      await fetchTransactions({
+        search: searchQuery || undefined,
+        startDate: dateRange.startDate || undefined,
+        endDate: dateRange.endDate || undefined,
+        statuses: selectedStatuses.length ? selectedStatuses : undefined,
+        providers: selectedProviders.length ? selectedProviders : undefined,
+      })
+    } finally {
+      setRetrying(false)
+    }
+  }, [
+    fetchTransactions,
+    searchQuery,
+    dateRange.startDate,
+    dateRange.endDate,
+    selectedStatuses,
+    selectedProviders,
+  ])
 
   // ── Sorting ─────────────────────────────────────────────────────────────────
   const handleSort = (column: keyof Transaction) => {
@@ -169,6 +195,31 @@ export const TransactionsTable: React.FC<{
 
   const totalCount = (transactions ?? []).length
 
+  // ── #725 — Error state with accessible retry action ────────────────────────
+  // Only shown when there are no rows to preserve; if rows exist we keep the
+  // table visible and surface the retry inline instead of blanking it.
+  const renderErrorState = () => (
+    <div className="transactions-error" role="alert" aria-live="assertive">
+      <p className="transactions-error__message">
+        {error || 'Failed to load transactions.'}
+      </p>
+      <button
+        type="button"
+        className="transactions-error__retry"
+        onClick={handleRetry}
+        disabled={retrying}
+        aria-busy={retrying}
+      >
+        <RefreshCw
+          size={16}
+          className={retrying ? 'transactions-error__retry-icon spinning' : 'transactions-error__retry-icon'}
+          aria-hidden="true"
+        />
+        {retrying ? 'Retrying…' : 'Retry'}
+      </button>
+    </div>
+  )
+
   // ── SortHeader sub-component ─────────────────────────────────────────────────
   const SortHeader: React.FC<{
     column: keyof Transaction
@@ -227,37 +278,6 @@ export const TransactionsTable: React.FC<{
     onMouseLeave: (event: React.MouseEvent<HTMLTableCellElement>) => {
       const row = event.currentTarget.closest('tr')
       if (
-        !row ||
-        !(event.relatedTarget instanceof Node) ||
-        !row.contains(event.relatedTarget)
-      ) hidePreview()
-    },
-    onFocus: (event: React.FocusEvent<HTMLTableCellElement>) => {
-      setActiveRowIndex(index)
-      const row = event.currentTarget.closest('tr')
-      if (row) schedulePreview(tx, row)
-    },
-    onBlur: (event: React.FocusEvent<HTMLTableCellElement>) => {
-      const row = event.currentTarget.closest('tr')
-      if (
-        !row ||
-        !(event.relatedTarget instanceof Node) ||
-        !row.contains(event.relatedTarget)
-      ) hidePreview()
-    },
-    onKeyDown: (event: React.KeyboardEvent<HTMLTableCellElement>) => handleKeyDown(event, index, tx),
-    onTouchStart: (event: React.TouchEvent<HTMLTableCellElement>) => {
-      const row = event.currentTarget.closest('tr')
-      if (row) handleTouchStart(event, row, tx)
-    },
-    onTouchEnd: handleTouchEnd,
-    onTouchCancel: handleTouchEnd,
-    onTouchMove: handleTouchEnd,
-    onContextMenu: (event: React.MouseEvent<HTMLTableCellElement>) => {
-      event.preventDefault()
-      hidePreview()
-    },
-  })
+    
 
-  return null
-}
+/* … truncated 1126 chars — edit only what you need near the top … */
