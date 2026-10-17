@@ -21,6 +21,77 @@ interface PreviewState {
   position: TransactionPreviewPosition
 }
 
+/**
+ * #726 — Normalized sort value. `null` marks a missing/invalid value so it can
+ * be placed deterministically (always last) regardless of sort direction.
+ */
+type NormalizedSortValue =
+  | { kind: 'number'; value: number }
+  | { kind: 'date'; value: number }
+  | { kind: 'string'; value: string }
+  | null
+
+const DATE_LIKE = /^\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?$/
+
+/**
+ * #726 — Normalize a raw transaction field into a comparable value.
+ * Numbers (and numeric strings) compare numerically, date-like strings compare
+ * by timestamp, everything else compares as a lowercased string. Empty,
+ * null, undefined, NaN and unparseable date-like values normalize to `null`.
+ */
+const normalizeSortValue = (raw: unknown): NormalizedSortValue => {
+  if (raw === null || raw === undefined) return null
+
+  if (typeof raw === 'number') {
+    return Number.isFinite(raw) ? { kind: 'number', value: raw } : null
+  }
+
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim()
+    if (trimmed === '') return null
+
+    if (DATE_LIKE.test(trimmed)) {
+      const time = Date.parse(trimmed)
+      return Number.isNaN(time) ? null : { kind: 'date', value: time }
+    }
+
+    // Numeric strings (e.g. amounts serialized as strings) sort numerically.
+    const asNumber = Number(trimmed)
+    if (Number.isFinite(asNumber)) {
+      return { kind: 'number', value: asNumber }
+    }
+
+    return { kind: 'string', value: trimmed.toLowerCase() }
+  }
+
+  return null
+}
+
+/**
+ * #726 — Compare two normalized values. Missing values always sort last,
+ * independent of direction. Mixed kinds fall back to a stable string compare.
+ */
+const compareNormalized = (
+  a: NormalizedSortValue,
+  b: NormalizedSortValue
+): number => {
+  if (a === null && b === null) return 0
+  if (a === null) return 1
+  if (b === null) return -1
+
+  if (a.kind === b.kind) {
+    if (a.kind === 'string' && b.kind === 'string') {
+      return a.value.localeCompare(b.value)
+    }
+    if (a.kind !== 'string' && b.kind !== 'string') {
+      return a.value - b.value
+    }
+  }
+
+  // Mixed kinds: deterministic string comparison of the raw normalized form.
+  return String(a.value).localeCompare(String(b.value))
+}
+
 const VirtualizedTable = React.forwardRef<
   HTMLTableElement,
   React.ComponentProps<'table'>
@@ -180,17 +251,28 @@ export const TransactionsTable: React.FC<{
 
     if (!sort.column) return filtered
 
-    return [...filtered].sort((a, b) => {
-      const col = sort.column as keyof Transaction
-      const aVal = a[col]
-      const bVal = b[col]
-      if (aVal === bVal) return 0
-      const result =
-        typeof aVal === 'number' && typeof bVal === 'number'
-          ? aVal - bVal
-          : String(aVal).localeCompare(String(bVal))
-      return sort.direction === 'asc' ? result : -result
-    })
+    const col = sort.column as keyof Transaction
+    const direction = sort.direction === 'asc' ? 1 : -1
+
+    // #726 — Decorate with normalized values + original index so equal values
+    // tie-break on stable input order (deterministic across renders/browsers).
+    return filtered
+      .map((tx, index) => ({
+        tx,
+        index,
+        value: normalizeSortValue(tx[col]),
+      }))
+      .sort((a, b) => {
+        const result = compareNormalized(a.value, b.value)
+        // Missing values always last, regardless of direction.
+        if (a.value === null || b.value === null) {
+          if (result !== 0) return result
+        } else if (result !== 0) {
+          return result * direction
+        }
+        return a.index - b.index
+      })
+      .map((entry) => entry.tx)
   }, [transactions, searchQuery, dateRange, selectedStatuses, sort])
 
   const totalCount = (transactions ?? []).length
@@ -221,63 +303,6 @@ export const TransactionsTable: React.FC<{
   )
 
   // ── SortHeader sub-component ─────────────────────────────────────────────────
-  const SortHeader: React.FC<{
-    column: keyof Transaction
-    label: string
-  }> = ({ column, label }) => {
-    const direction = sort.column === column
-      ? sort.direction === 'asc' ? 'ascending' : 'descending'
-      : 'none'
+  
 
-    return (
-      <th scope="col" aria-sort={direction}>
-        <button type="button" onClick={() => handleSort(column)} className="sortable-header">
-          <span className="header-content">
-            {label}
-            {sort.column === column &&
-              (sort.direction === 'asc' ? (
-                <ChevronUp size={16} />
-              ) : (
-                <ChevronDown size={16} />
-              ))}
-          </span>
-        </button>
-      </th>
-    )
-  }
-
-  const renderTableHeader = () => (
-    <tr>
-      <SortHeader column="reference" label="Reference" />
-      <SortHeader column="amount" label="Amount" />
-      <SortHeader column="status" label="Status" />
-      <SortHeader column="provider" label="Provider" />
-      <SortHeader column="timestamp" label="Date" />
-      <th scope="col">Actions</th>
-    </tr>
-  )
-
-  const rowCellHandlers = (index: number, tx: Transaction) => ({
-    onClick: (event: React.MouseEvent<HTMLTableCellElement>) => {
-      if (
-        event.target instanceof Element &&
-        !event.target.closest('button')
-      ) {
-        if (longPressTriggered.current) {
-          longPressTriggered.current = false
-          return
-        }
-        hidePreview()
-        onRowClick(tx)
-      }
-    },
-    onMouseEnter: (event: React.MouseEvent<HTMLTableCellElement>) => {
-      const row = event.currentTarget.closest('tr')
-      if (row) schedulePreview(tx, row)
-    },
-    onMouseLeave: (event: React.MouseEvent<HTMLTableCellElement>) => {
-      const row = event.currentTarget.closest('tr')
-      if (
-    
-
-/* … truncated 1126 chars — edit only what you need near the top … */
+/* … truncated 1865 chars — edit only what you need near the top … */

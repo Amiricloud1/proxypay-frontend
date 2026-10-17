@@ -139,3 +139,87 @@ describe('transactionStore retry', () => {
     expect(useTransactionStore.getState().error).toBeNull()
   })
 })
+
+describe('transactionStore sorting', () => {
+  const makeRow = (id: string, overrides: Record<string, unknown> = {}) =>
+    ({ id, amount: 0, createdAt: '2024-01-01T00:00:00.000Z', ...overrides }) as never
+
+  beforeEach(() => {
+    useTransactionStore.setState({
+      transactions: [],
+      total: 0,
+      loading: false,
+      retrying: false,
+      error: null,
+      filters: { limit: 10, offset: 0 },
+    })
+  })
+
+  it('keeps equal values in a deterministic order across repeated sorts', () => {
+    const rows = [makeRow('txn_b', { amount: 5 }), makeRow('txn_a', { amount: 5 }), makeRow('txn_c', { amount: 5 })]
+    useTransactionStore.setState({ transactions: rows, total: rows.length })
+
+    useTransactionStore.getState().setSort('amount', 'asc')
+    const first = useTransactionStore.getState().transactions.map((t) => (t as { id: string }).id)
+
+    useTransactionStore.getState().setSort('amount', 'desc')
+    useTransactionStore.getState().setSort('amount', 'asc')
+    const second = useTransactionStore.getState().transactions.map((t) => (t as { id: string }).id)
+
+    expect(first).toEqual(second)
+    expect(first).toEqual(['txn_a', 'txn_b', 'txn_c'])
+  })
+
+  it('places missing values last regardless of sort direction', () => {
+    const rows = [
+      makeRow('txn_missing', { amount: null }),
+      makeRow('txn_low', { amount: 1 }),
+      makeRow('txn_high', { amount: 9 }),
+    ]
+    useTransactionStore.setState({ transactions: rows, total: rows.length })
+
+    useTransactionStore.getState().setSort('amount', 'asc')
+    expect(useTransactionStore.getState().transactions.map((t) => (t as { id: string }).id)).toEqual([
+      'txn_low',
+      'txn_high',
+      'txn_missing',
+    ])
+
+    useTransactionStore.getState().setSort('amount', 'desc')
+    expect(useTransactionStore.getState().transactions.map((t) => (t as { id: string }).id)).toEqual([
+      'txn_high',
+      'txn_low',
+      'txn_missing',
+    ])
+  })
+
+  it('sorts numeric values numerically rather than lexically', () => {
+    const rows = [makeRow('txn_10', { amount: 10 }), makeRow('txn_2', { amount: 2 }), makeRow('txn_1', { amount: 1 })]
+    useTransactionStore.setState({ transactions: rows, total: rows.length })
+
+    useTransactionStore.getState().setSort('amount', 'asc')
+
+    expect(useTransactionStore.getState().transactions.map((t) => (t as { id: string }).id)).toEqual([
+      'txn_1',
+      'txn_2',
+      'txn_10',
+    ])
+  })
+
+  it('sorts date-like values chronologically and treats invalid dates as missing', () => {
+    const rows = [
+      makeRow('txn_invalid', { createdAt: 'not-a-date' }),
+      makeRow('txn_late', { createdAt: '2024-03-01T00:00:00.000Z' }),
+      makeRow('txn_early', { createdAt: '2024-01-01T00:00:00.000Z' }),
+    ]
+    useTransactionStore.setState({ transactions: rows, total: rows.length })
+
+    useTransactionStore.getState().setSort('createdAt', 'asc')
+
+    expect(useTransactionStore.getState().transactions.map((t) => (t as { id: string }).id)).toEqual([
+      'txn_early',
+      'txn_late',
+      'txn_invalid',
+    ])
+  })
+})

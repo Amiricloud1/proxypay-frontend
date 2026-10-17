@@ -52,6 +52,9 @@ describe('TransactionsTable preview and interactions', () => {
       .toEqual(['transaction-row-low', 'transaction-row-high'])
   }
 
+  const getRowOrder = () =>
+    screen.getAllByTestId(/^transaction-row-/).map((row) => row.getAttribute('data-testid'))
+
   it('waits 200ms before showing a hover preview and supports keyboard opening', () => {
     const onRowClick = vi.fn()
     render(<TransactionsTable onRowClick={onRowClick} />)
@@ -141,4 +144,70 @@ describe('TransactionsTable preview and interactions', () => {
   it('sorts by status', () => expectAscendingSort('Status', 'status', 'settled', 'failed'))
   it('sorts by provider', () => expectAscendingSort('Provider', 'provider', 'vodafone', 'airtel'))
   it('sorts by date', () => expectAscendingSort('Date', 'timestamp', '2026-02-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z'))
+
+  it('keeps equal values in a deterministic order across repeated renders', () => {
+    mockStore.transactions = [
+      makeTransaction({ id: 'a', reference: 'SAME', amount: 10 }),
+      makeTransaction({ id: 'b', reference: 'SAME', amount: 10 }),
+      makeTransaction({ id: 'c', reference: 'SAME', amount: 10 }),
+    ]
+    mockStore.total = 3
+    const { unmount } = render(<TransactionsTable onRowClick={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Amount' }))
+    const firstOrder = getRowOrder()
+    unmount()
+
+    render(<TransactionsTable onRowClick={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Amount' }))
+    expect(getRowOrder()).toEqual(firstOrder)
+  })
+
+  it('places missing values last when sorting ascending', () => {
+    mockStore.transactions = [
+      makeTransaction({ id: 'missing', amount: null as unknown as number }),
+      makeTransaction({ id: 'present', amount: 10 }),
+    ]
+    mockStore.total = 2
+    render(<TransactionsTable onRowClick={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Amount' }))
+    expect(getRowOrder()).toEqual(['transaction-row-present', 'transaction-row-missing'])
+  })
+
+  it('places invalid values last when sorting ascending', () => {
+    mockStore.transactions = [
+      makeTransaction({ id: 'invalid', amount: 'not-a-number' as unknown as number }),
+      makeTransaction({ id: 'valid', amount: 10 }),
+    ]
+    mockStore.total = 2
+    render(<TransactionsTable onRowClick={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Amount' }))
+    expect(getRowOrder()).toEqual(['transaction-row-valid', 'transaction-row-invalid'])
+  })
+
+  it('normalizes numeric strings when sorting by amount', () => {
+    mockStore.transactions = [
+      makeTransaction({ id: 'high', amount: '100' as unknown as number }),
+      makeTransaction({ id: 'low', amount: '9' as unknown as number }),
+    ]
+    mockStore.total = 2
+    render(<TransactionsTable onRowClick={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Amount' }))
+    expect(getRowOrder()).toEqual(['transaction-row-low', 'transaction-row-high'])
+  })
+
+  it('normalizes date-like values when sorting by date', () => {
+    mockStore.transactions = [
+      makeTransaction({ id: 'later', timestamp: '2026-02-01T00:00:00.000Z' }),
+      makeTransaction({ id: 'earlier', timestamp: '2026-01-01T00:00:00.000Z' }),
+      makeTransaction({ id: 'missing', timestamp: null as unknown as string }),
+    ]
+    mockStore.total = 3
+    render(<TransactionsTable onRowClick={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Date' }))
+    expect(getRowOrder()).toEqual([
+      'transaction-row-earlier',
+      'transaction-row-later',
+      'transaction-row-missing',
+    ])
+  })
 })
