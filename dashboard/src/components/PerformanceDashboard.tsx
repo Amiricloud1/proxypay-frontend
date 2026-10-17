@@ -14,7 +14,7 @@ const metricNames = [
   { key: 'page-load', label: 'Page load', unit: 'ms', threshold: 3000 },
   { key: 'ttfb', label: 'Time to first byte', unit: 'ms', threshold: 800 },
   { key: 'api-response', label: 'API response time', unit: 'ms', threshold: 1000 },
-  { key: 'component-render', label: 'Dashboard render', unit: 'ms', threshold: 50 },
+  { key: 'component-render', label: 'Last component render', unit: 'ms', threshold: 16.7 },
 ]
 
 const displayValue = (value: number, unit: string) =>
