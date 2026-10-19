@@ -57,3 +57,24 @@ coverage/
 # Environment files
 .env.local
 .env.*.local
+
+# Playwright artifacts
+test-results/
+playwright-report/
+
+# Visual regression baselines (generated)
+tests/visual-baselines/
+
+# Quality reports (generated)
+.quality-reports/
+
+# Load test output
+load-test-results/
+
+# Misc generated docs
+*.implementation.md
+BUNDLE_SIZE_*.md
+LOGS_DASHBOARD_IMPLEMENTATION.md
+REQUEST_HISTORY_IMPLEMENTATION.md
+IMPLEMENTATION_SUMMARY.md
+FEATURE_FLAGS.md

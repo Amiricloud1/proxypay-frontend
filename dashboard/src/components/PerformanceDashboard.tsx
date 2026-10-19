@@ -5,6 +5,7 @@ import {
   performanceMetricEvent,
   readPerformanceMetrics,
 } from '../services/performance'
+import { ResizableWidget } from './ResizableWidget'
 import '../styles/PerformanceDashboard.css'
 
 const metricNames = [
@@ -65,11 +66,19 @@ export const PerformanceDashboard = () => {
           const metric = latestByName.get(definition.key)
           const degraded = Boolean(metric && metric.value > definition.threshold)
           return (
-            <article className={`performance-metric ${degraded && alertsEnabled ? 'degraded' : ''}`} key={definition.key}>
-              <span>{definition.label}</span>
-              <strong>{metric ? displayValue(metric.value, definition.unit) : 'Waiting for data'}</strong>
-              {degraded && alertsEnabled && <small role="status">Above target</small>}
-            </article>
+            <ResizableWidget
+              key={definition.key}
+              widgetId={`perf-metric-${definition.key}`}
+              defaultWidth={260}
+              defaultHeight={120}
+              title={definition.label}
+            >
+              <article className={`performance-metric ${degraded && alertsEnabled ? 'degraded' : ''}`}>
+                <span>{definition.label}</span>
+                <strong>{metric ? displayValue(metric.value, definition.unit) : 'Waiting for data'}</strong>
+                {degraded && alertsEnabled && <small role="status">Above target</small>}
+              </article>
+            </ResizableWidget>
           )
         })}
       </div>
