@@ -44,6 +44,10 @@ const config: Config = {
       items: [
         { to: '/', label: 'Overview', position: 'left' },
         { to: '/api', label: 'Reference', position: 'left' },
+        { to: '/dashboard-config', label: 'Dashboard Config', position: 'left' },
+        { to: '/transaction-detail', label: 'Transactions', position: 'left' },
+        { to: '/transaction-comparison', label: 'Compare', position: 'left' },
+        { to: '/live-filter', label: 'Live Filter', position: 'left' },
         {
           href: 'https://github.com/sublime247/proxypay',
           label: 'GitHub',
