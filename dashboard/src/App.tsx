@@ -19,6 +19,26 @@ import './App.css'
 
 type Page = 'transactions' | 'reconciliation' | 'settings'
 
+// Issue #707: keep the selected transaction addressable via the URL so that
+// deep-linked selections survive search / deprecation filter changes.
+const SELECTED_TX_PARAM = 'tx'
+
+function readSelectedTxFromUrl(): string | null {
+  if (typeof window === 'undefined') return null
+  return new URLSearchParams(window.location.search).get(SELECTED_TX_PARAM)
+}
+
+function writeSelectedTxToUrl(id: string | null) {
+  if (typeof window === 'undefined') return null
+  const url = new URL(window.location.href)
+  if (id) {
+    url.searchParams.set(SELECTED_TX_PARAM, id)
+  } else {
+    url.searchParams.delete(SELECTED_TX_PARAM)
+  }
+  window.history.replaceState(window.history.state, '', url.toString())
+}
+
 export default function App() {
   const [currentPage, setCurrentPage] = useState<Page>('transactions')
   const {
