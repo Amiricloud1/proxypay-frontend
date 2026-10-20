@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { format } from 'date-fns'
 import { ChevronDown, ChevronUp, RotateCcw, Settings } from 'lucide-react'
 import { TableVirtuoso, type TableVirtuosoHandle } from 'react-virtuoso'
@@ -11,11 +11,18 @@ import { TransactionTableSkeleton } from './TransactionTableSkeleton'
 import { TransactionSearch, matchesSearch, HighlightMatch } from './TransactionSearch'
 import { DateRangePicker, DateRange, matchesDateRange } from './DateRangePicker'
 import { StatusFilter, TransactionStatus, matchesStatus } from './StatusFilter'
+import { TransactionRowPreview } from './TransactionRowPreview'
+import { usePreviewState } from '../hooks/usePreviewState'
 import '../styles/TransactionsTable.css'
 
 interface SortState {
   column: keyof Transaction | null
   direction: 'asc' | 'desc'
+}
+
+interface TransactionPreviewPosition {
+  top: number
+  left: number
 }
 
 interface PreviewState {
@@ -68,13 +75,15 @@ export const TransactionsTable: React.FC<{
 
   const [sort, setSort] = useState<SortState>({ column: (viewPrefs.sortColumn as keyof Transaction) || null, direction: viewPrefs.sortDirection })
   const [preview, setPreview] = useState<PreviewState | null>(null)
-  const [preferencesOpen, setPreferencesOpen] = useState(false)
-  /** #495 — Multi-select provider filter state (persisted in component state) */
-  const [selectedProviders, setSelectedProviders] = useState<Provider[]>([])
+  const [activeRowIndex, setActiveRowIndex] = useState<number | null>(null)
+  const [announcement, setAnnouncement] = useState('')
+
   const previewTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const touchTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const longPressTriggered = useRef(false)
-  const skipInitialFetch = useRef(!loadOnMount)
+  const virtuosoRef = useRef<TableVirtuosoHandle>(null)
+  const pendingFocusIndex = useRef<number | null>(null)
+  const previewContainerRef = useRef<HTMLDivElement>(null)
 
   // ── Filter state ────────────────────────────────────────────────────────────
   const [searchQuery, setSearchQuery] = useState('')
@@ -86,8 +95,6 @@ export const TransactionsTable: React.FC<{
   const [selectedStatuses, setSelectedStatuses] = useState<TransactionStatus[]>([])
 
   // ── Fetch on mount — pass empty filters so store defaults are preserved ─────
-  // App.tsx also calls fetchTransactions; we avoid a double fetch by relying on
-  // the store's loading flag.  If the store already has data, skip the call.
   useEffect(() => {
     if (transactions.length === 0) {
       fetchTransactions({})
@@ -149,6 +156,122 @@ export const TransactionsTable: React.FC<{
 
   const totalCount = (transactions ?? []).length
 
+  // ── Preview management ────────────────────────────────────────────────────────
+
+  const schedulePreview = useCallback((tx: Transaction, row: HTMLTableRowElement) => {
+    // Clear any existing preview timer
+    if (previewTimer.current) clearTimeout(previewTimer.current)
+
+    previewTimer.current = setTimeout(() => {
+      const position = previewForRow(row)
+      setPreview({ transaction: tx, position })
+    }, 200) // PREVIEW_DELAY_MS
+  }, [])
+
+  const hidePreview = useCallback(() => {
+    if (previewTimer.current) {
+      clearTimeout(previewTimer.current)
+      previewTimer.current = null
+    }
+    setPreview(null)
+  }, [])
+
+  // ── Touch long-press handling ────────────────────────────────────────────────
+
+  const handleTouchStart = useCallback(
+    (event: React.TouchEvent<HTMLTableRowElement> | React.TouchEvent<HTMLTableCellElement>, 
+     row: HTMLTableRowElement, 
+     tx: Transaction) => {
+      if (touchTimer.current) clearTimeout(touchTimer.current)
+      longPressTriggered.current = false
+
+      touchTimer.current = setTimeout(() => {
+        longPressTriggered.current = true
+        schedulePreview(tx, row)
+        setAnnouncement(`Preview for transaction ${tx.reference} opened. Press Escape to close.`)
+      }, 500) // LONG_PRESS_DELAY_MS
+    },
+    [schedulePreview]
+  )
+
+  const handleTouchEnd = useCallback(() => {
+    if (touchTimer.current) {
+      clearTimeout(touchTimer.current)
+      touchTimer.current = null
+    }
+  }, [])
+
+  // ── Keyboard handling ────────────────────────────────────────────────────────
+
+  const handleKeyDown = useCallback(
+    (
+      event: React.KeyboardEvent<HTMLTableRowElement> | React.KeyboardEvent<HTMLTableCellElement>,
+      tx?: Transaction
+    ) => {
+      // Escape key: dismiss preview
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        hidePreview()
+        setAnnouncement('Preview closed')
+        return
+      }
+
+      // Enter/Space: open row or trigger preview
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault()
+        if (preview?.transaction.id === tx?.id) {
+          hidePreview()
+          onRowClick(tx)
+        } else if (tx && !preview) {
+          const row = event.currentTarget as HTMLTableRowElement
+          schedulePreview(tx, row)
+          setAnnouncement(`Preview for transaction ${tx.reference} opened. Press Enter to open details, Escape to close.`)
+        }
+        return
+      }
+
+      // Arrow keys: navigate between rows
+      if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+        event.preventDefault()
+        const direction = event.key === 'ArrowUp' ? -1 : 1
+        const newIndex = Math.max(
+          0,
+          Math.min((activeRowIndex ?? 0) + direction, filteredAndSorted.length - 1)
+        )
+        setActiveRowIndex(newIndex)
+        pendingFocusIndex.current = newIndex
+        hidePreview()
+
+        const targetTx = filteredAndSorted[newIndex]
+        if (targetTx) {
+          setAnnouncement(`Navigated to transaction ${targetTx.reference}`)
+        }
+        return
+      }
+    },
+    [preview, hidePreview, onRowClick, schedulePreview, activeRowIndex, filteredAndSorted]
+  )
+
+  // ── Outside-click handler: dismiss preview when clicking outside ──────────────
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (
+        previewContainerRef.current &&
+        !previewContainerRef.current.contains(event.target as Node)
+      ) {
+        hidePreview()
+      }
+    }
+
+    if (preview) {
+      document.addEventListener('mousedown', handleClickOutside)
+      return () => {
+        document.removeEventListener('mousedown', handleClickOutside)
+      }
+    }
+  }, [preview, hidePreview])
+
   // ── SortHeader sub-component ─────────────────────────────────────────────────
   const SortHeader: React.FC<{
     column: keyof Transaction
@@ -186,58 +309,6 @@ export const TransactionsTable: React.FC<{
     </tr>
   )
 
-  const rowCellHandlers = (index: number, tx: Transaction) => ({
-    onClick: (event: React.MouseEvent<HTMLTableCellElement>) => {
-      if (
-        event.target instanceof Element &&
-        !event.target.closest('button')
-      ) {
-        if (longPressTriggered.current) {
-          longPressTriggered.current = false
-          return
-        }
-        hidePreview()
-        onRowClick(tx)
-      }
-    },
-    onMouseEnter: (event: React.MouseEvent<HTMLTableCellElement>) => {
-      const row = event.currentTarget.closest('tr')
-      if (row) schedulePreview(tx, row)
-    },
-    onMouseLeave: (event: React.MouseEvent<HTMLTableCellElement>) => {
-      const row = event.currentTarget.closest('tr')
-      if (
-        !row ||
-        !(event.relatedTarget instanceof Node) ||
-        !row.contains(event.relatedTarget)
-      ) hidePreview()
-    },
-    onFocus: (event: React.FocusEvent<HTMLTableCellElement>) => {
-      setActiveRowIndex(index)
-      const row = event.currentTarget.closest('tr')
-      if (row) schedulePreview(tx, row)
-    },
-    onBlur: (event: React.FocusEvent<HTMLTableCellElement>) => {
-      const row = event.currentTarget.closest('tr')
-      if (
-        !row ||
-        !(event.relatedTarget instanceof Node) ||
-        !row.contains(event.relatedTarget)
-      ) hidePreview()
-    },
-    onKeyDown: (event: React.KeyboardEvent<HTMLTableCellElement>) => handleKeyDown(event, index, tx),
-    onTouchStart: (event: React.TouchEvent<HTMLTableCellElement>) => {
-      const row = event.currentTarget.closest('tr')
-      if (row) handleTouchStart(event, row, tx)
-    },
-    onTouchEnd: handleTouchEnd,
-    onTouchCancel: handleTouchEnd,
-    onTouchMove: handleTouchEnd,
-    onContextMenu: (event: React.MouseEvent<HTMLTableCellElement>) => {
-      if (longPressTriggered.current) event.preventDefault()
-    },
-  })
-
   if (error) {
     return <div className="error-message">{error}</div>
   }
@@ -247,7 +318,12 @@ export const TransactionsTable: React.FC<{
   }
 
   return (
-    <div className="transactions-table-container">
+    <div
+      className="transactions-table-container"
+      ref={previewContainerRef}
+      role="region"
+      aria-label="Transactions table with preview"
+    >
       {/* ── Filter bar ─────────────────────────────────────────────────────── */}
       <div className="filter-bar">
         <TransactionSearch
@@ -303,7 +379,7 @@ export const TransactionsTable: React.FC<{
             <SortHeader column="status" label="Status" />
             <SortHeader column="provider" label="Provider" />
             <SortHeader column="timestamp" label="Date" />
-            <th>Actions</th>
+            <th scope="col">Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -316,37 +392,40 @@ export const TransactionsTable: React.FC<{
               </td>
             </tr>
           ) : (
-            filteredAndSorted.map((tx) => (
+            filteredAndSorted.map((tx, index) => (
               <tr
                 key={tx.id}
+                data-testid={`transaction-row-${tx.id}`}
+                className="transaction-row"
+                tabIndex={activeRowIndex === index ? 0 : -1}
+                onKeyDown={(event) => handleKeyDown(event, tx)}
+                onMouseEnter={(event) => schedulePreview(tx, event.currentTarget)}
+                onMouseLeave={hidePreview}
+                onFocus={() => {
+                  setActiveRowIndex(index)
+                  schedulePreview(tx, event.currentTarget as HTMLTableRowElement)
+                }}
+                onBlur={() => hidePreview()}
+                onTouchStart={(event) => handleTouchStart(event, event.currentTarget, tx)}
+                onTouchEnd={handleTouchEnd}
+                onTouchCancel={handleTouchEnd}
+                onTouchMove={handleTouchEnd}
                 onClick={() => {
                   if (longPressTriggered.current) {
                     longPressTriggered.current = false
                     return
                   }
+                  hidePreview()
                   onRowClick(tx)
                 }}
-                onMouseEnter={(event) => showRowPreview && schedulePreview(tx, event.currentTarget)}
-                onMouseLeave={hidePreview}
-                onFocus={(event) => showRowPreview && schedulePreview(tx, event.currentTarget)}
-                onBlur={hidePreview}
-                onKeyDown={(event) => handleKeyDown(event, tx)}
-                onTouchStart={(event) => handleTouchStart(event, tx)}
-                onTouchEnd={handleTouchEnd}
-                onTouchCancel={handleTouchEnd}
-                onTouchMove={handleTouchEnd}
-                onContextMenu={(event) => {
-                  if (longPressTriggered.current) event.preventDefault()
-                }}
-                tabIndex={0}
-                aria-label={`View transaction ${tx.reference}, $${tx.amount.toFixed(2)}, ${tx.status}, ${tx.provider}`}
+                aria-label={`View transaction ${tx.reference}, $${tx.amount.toFixed(
+                  2
+                )}, ${tx.status}, ${tx.provider}`}
                 aria-describedby={
                   preview?.transaction.id === tx.id
                     ? 'transaction-row-preview'
                     : undefined
                 }
-                data-testid={`transaction-row-${tx.id}`}
-                className="transaction-row"
               >
                 <td>
                   <HighlightMatch text={tx.reference} query={searchQuery} />
@@ -374,71 +453,22 @@ export const TransactionsTable: React.FC<{
                   </button>
                 </td>
               </tr>
-            </tbody>
-          </table>
-        ) : (
-          <TableVirtuoso
-            ref={virtuosoRef}
-            className="transactions-table-viewport"
-            data={sortedTransactions}
-            computeItemKey={(_index, tx) => tx.id}
-            components={virtuosoComponents}
-            fixedHeaderContent={renderTableHeader}
-            rangeChanged={({ startIndex, endIndex }) => {
-              const pending = pendingFocusIndex.current
-              if (pending !== null && pending >= startIndex && pending <= endIndex) {
-                document.getElementById(`transaction-cell-${pending}`)?.focus()
-                pendingFocusIndex.current = null
-              }
-            }}
-            itemContent={(index, tx) => {
-              const interactions = rowCellHandlers(index, tx)
-              const previewDescription = preview?.transaction.id === tx.id
-                ? 'transaction-row-preview'
-                : undefined
+            ))
+          )}
+        </tbody>
+      </table>
 
-              return (
-                <>
-                  <td
-                    {...interactions}
-                    id={`transaction-cell-${index}`}
-                    data-testid={`transaction-row-${tx.id}`}
-                    className="transaction-row"
-                    tabIndex={activeRowIndex === index ? 0 : -1}
-                    aria-label={`View transaction ${tx.reference}, $${tx.amount.toFixed(2)}, ${tx.status}, ${tx.provider}`}
-                    aria-describedby={previewDescription}
-                  >
-                    {tx.reference}
-                  </td>
-                  <td {...interactions} className="amount">${tx.amount.toFixed(2)}</td>
-                  <td {...interactions}>
-                    <span className={`status-badge status-${tx.status}`}>
-                      {tx.status}
-                    </span>
-                  </td>
-                  <td {...interactions}>{tx.provider}</td>
-                  <td {...interactions}>{format(new Date(tx.timestamp), 'MMM dd, yyyy')}</td>
-                  <td {...interactions} className="action-cell">
-                    <button
-                      className="view-button"
-                      onClick={(event) => {
-                        event.stopPropagation()
-                        hidePreview()
-                        onRowClick(tx)
-                      }}
-                    >
-                      View Details
-                    </button>
-                  </td>
-                </>
-              )
-            }}
-          />
-        )}
-      </div>
-      <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+      {/* ── Announcements for screen readers ────────────────────────────────── */}
+      <div
+        className="sr-only"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+      >
         {announcement}
       </div>
+
+      {/* ── Preview popup ──────────────────────────────────────────────────── */}
       {preview && (
         <TransactionRowPreview
           transaction={preview.transaction}
@@ -446,10 +476,8 @@ export const TransactionsTable: React.FC<{
           visible
         />
       )}
-      <ViewPreferencesPanel
-        isOpen={preferencesOpen}
-        onClose={() => setPreferencesOpen(false)}
-      />
-    </>
+    </div>
   )
 }
+
+export default TransactionsTable
