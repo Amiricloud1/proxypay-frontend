@@ -168,91 +168,31 @@ export interface DashboardNotification {
   actionUrl?: string
 }
 
-// ─── Shared internal types ─────────────────────────────────────────────────────
-
-/** Many endpoints wrap the payload in a { data: T } envelope. */
-type ApiPayload<T> = T | { data: T }
-
-// ─── Retry helper (Issue #600) ─────────────────────────────────────────────────
-
-/** Options for the built-in exponential-backoff retry. */
-export interface ApiRetryOptions {
-  /** Maximum number of attempts (default 3). */
-  maxAttempts?: number
-  /** Initial back-off delay in ms (default 1000). Doubles on each attempt. */
-  initialDelayMs?: number
-  /** HTTP status codes that should trigger a retry (default: 502, 503, 504). */
-  retryOn?: number[]
-}
-
-const DEFAULT_RETRY_STATUSES = [502, 503, 504]
-
-async function withRetry<T>(
-  fn: (attempt: number) => Promise<T>,
-  logId: string,
-  options: ApiRetryOptions = {},
-): Promise<T> {
-  const maxAttempts = Math.max(1, options.maxAttempts ?? 3)
-  const initialDelayMs = Math.max(0, options.initialDelayMs ?? 1000)
-  const retryOn = options.retryOn ?? DEFAULT_RETRY_STATUSES
-  const logStore = useInterceptorLogStore.getState()
-
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    try {
-      if (attempt > 1) {
-        logStore.markRetry(logId, attempt - 1)
-      }
-      return await fn(attempt)
-    } catch (error: unknown) {
-      const isAxiosError =
-        error != null &&
-        typeof error === 'object' &&
-        'isAxiosError' in error &&
-        (error as { isAxiosError?: boolean }).isAxiosError === true
-
-      const statusCode =
-        isAxiosError
-          ? ((error as { response?: { status?: number } }).response?.status ?? 0)
-          : 0
-
-      const shouldRetry = retryOn.includes(statusCode)
-
-      if (attempt === maxAttempts || !shouldRetry) throw error
-      const delayMs = initialDelayMs * 2 ** (attempt - 1)
-      await new Promise<void>((resolve) => setTimeout(resolve, delayMs))
-    }
+/**
+ * Resolve a root-relative path against the configured base URL so that
+ * local resources stay inside the deployed project path (e.g. GitHub Pages
+ * `/proxypay-frontend/`). Absolute URLs and already-prefixed paths are
+ * returned unchanged.
+ */
+export function resolveBaseUrl(path: string): string {
+  if (!path || /^([a-z][a-z0-9+.-]*:)?\/\//i.test(path)) {
+    return path
   }
-  throw new Error('Retry loop exhausted')
-}
-
-// ─── Deduplication cache (Issue #599) ─────────────────────────────────────────
-
-interface InFlightEntry {
-  promise: Promise<unknown>
-  cancelSource: CancelTokenSource
-  logId: string
-}
-
-const inFlightRequests = new Map<string, InFlightEntry>()
-
-function requestKey(method: string, url: string, params: unknown): string {
-  try {
-    return `${method.toUpperCase()}::${url}::${JSON.stringify(params ?? {})}`
-  } catch {
-    return `${method.toUpperCase()}::${url}`
+  const baseUrl = (import.meta.env.BASE_URL || '/').replace(/\/$/, '')
+  if (!baseUrl) {
+    return path
   }
+  if (path === baseUrl || path.startsWith(`${baseUrl}/`)) {
+    return path
+  }
+  return path.startsWith('/') ? `${baseUrl}${path}` : `${baseUrl}/${path}`
 }
-
-// ─── ProxyPayAPI class ─────────────────────────────────────────────────────────
 
 class ProxyPayAPI {
   private client: AxiosInstance
   private authToken: string | null = null
 
-  constructor(baseURL?: string) {
-    // ── #598: resolve base URL from config store or use the provided default ──
-    const resolvedBase = baseURL ?? useApiConfigStore.getState().getEffectiveBaseUrl()
-
+  constructor(baseURL = resolveBaseUrl('/api')) {
     this.client = axios.create({
       baseURL: resolvedBase,
       withCredentials: true,
@@ -510,7 +450,7 @@ class ProxyPayAPI {
     id: string,
     schedule: Partial<CreateExportSchedule>
   ): Promise<ExportSchedule> {
-    const { data } = await this.client.patch(
+    const { data } = await this.client.put(
       `/transactions/exports/schedules/${encodeURIComponent(id)}`,
       schedule
     )
@@ -523,71 +463,39 @@ class ProxyPayAPI {
     )
   }
 
-  async getExportCompletionNotifications(): Promise<ExportCompletionNotification[]> {
-    const { data } = await this.client.get(
-      '/transactions/exports/notifications'
+  async runExportSchedule(id: string): Promise<ScheduledExport> {
+    const { data } = await this.client.post(
+      `/transactions/exports/schedules/${encodeURIComponent(id)}/run`
     )
-    return this.unwrap<ExportCompletionNotification[]>(data) || []
+    return this.unwrap<ScheduledExport>(data)
   }
 
-  async getNotificationSettings(): Promise<NotificationConfig> {
-    const { data } = await this.client.get('/notifications/settings')
-    return data
+  async getNotificationConfig(): Promise<NotificationConfig> {
+    const { data } = await this.client.get('/notifications/config')
+    return this.unwrap<NotificationConfig>(data)
   }
 
-  async updateNotificationSetting(
-    eventType: string,
-    emailEnabled: boolean,
-    webhookEnabled: boolean
-  ): Promise<NotificationSettings> {
-    const { data } = await this.client.put(
-      `/notifications/settings/${eventType}`,
-      {
-        emailEnabled,
-        webhookEnabled,
-      }
-    )
-    return data
-  }
-
-  async scheduleExport(options: {
-    includeAuditTrail: boolean
-    scheduledFor: string
-    filters?: TransactionFilters
-  }): Promise<ScheduledExport> {
-    const { data } = await this.client.post('/exports', options)
-    return data
+  async updateNotificationConfig(
+    config: NotificationConfig
+  ): Promise<NotificationConfig> {
+    const { data } = await this.client.put('/notifications/config', config)
+    return this.unwrap<NotificationConfig>(data)
   }
 
   async getNotifications(): Promise<DashboardNotification[]> {
     const { data } = await this.client.get('/notifications')
-    return data.notifications ?? data
+    return this.unwrap<DashboardNotification[]>(data) || []
   }
 
-  async markNotificationRead(id: string): Promise<void> {
-    await this.client.patch(`/notifications/${encodeURIComponent(id)}`, { read: true })
-  }
-
-  async markNotificationsRead(ids: string[]): Promise<DashboardNotification[]> {
-    const { data } = await this.client.patch('/notifications/bulk/read', { ids })
-    return data.notifications ?? data
-  }
-
-  // Health check
-  async healthCheck(): Promise<boolean> {
-    try {
-      await withRetry(
-        () => this.client.get('/health'),
-        'healthcheck-log',
-        retryOptions ?? { maxAttempts: 2, initialDelayMs: 500 },
-      )
-      return true
-    } catch {
-      return false
-    }
+  async markNotificationRead(id: string): Promise<DashboardNotification> {
+    const { data } = await this.client.post(
+      `/notifications/${encodeURIComponent(id)}/read`
+    )
+    return this.unwrap<DashboardNotification>(data)
   }
 }
 
-export const proxyPayAPI = new ProxyPayAPI()
-// Re-export withRetry for use by other modules that need retry logic (#600)
-export { withRetry }
+type ApiPayload<T> = T | { data: T }
+
+export const api = new ProxyPayAPI()
+export default api

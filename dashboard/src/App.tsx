@@ -19,24 +19,19 @@ import './App.css'
 
 type Page = 'transactions' | 'reconciliation' | 'settings'
 
-// Issue #707: keep the selected transaction addressable via the URL so that
-// deep-linked selections survive search / deprecation filter changes.
-const SELECTED_TX_PARAM = 'tx'
-
-function readSelectedTxFromUrl(): string | null {
-  if (typeof window === 'undefined') return null
-  return new URLSearchParams(window.location.search).get(SELECTED_TX_PARAM)
-}
-
-function writeSelectedTxToUrl(id: string | null) {
-  if (typeof window === 'undefined') return null
-  const url = new URL(window.location.href)
-  if (id) {
-    url.searchParams.set(SELECTED_TX_PARAM, id)
-  } else {
-    url.searchParams.delete(SELECTED_TX_PARAM)
-  }
-  window.history.replaceState(window.history.state, '', url.toString())
+const PAGE_METADATA: Record<Page, { title: string; description: string }> = {
+  transactions: {
+    title: 'Transactions | ProxyPay Dashboard',
+    description: 'Review, export, and manage your ProxyPay transaction history.',
+  },
+  reconciliation: {
+    title: 'Reconciliation | ProxyPay Dashboard',
+    description: 'Reconcile ProxyPay transactions against your settlement records.',
+  },
+  settings: {
+    title: 'Notification Settings | ProxyPay Dashboard',
+    description: 'Configure how and when ProxyPay sends you notifications.',
+  },
 }
 
 export default function App() {
@@ -65,8 +60,22 @@ export default function App() {
     fetchTransactions(filters)
   }, [])
 
-  const handleRowClick = (transaction: Transaction) => {
-    setSelectedTransaction(transaction)
+  // Keep document title and meta description in sync with the active route
+  useEffect(() => {
+    const { title, description } = PAGE_METADATA[currentPage]
+    document.title = title
+
+    let metaDescription = document.querySelector('meta[name="description"]')
+    if (!metaDescription) {
+      metaDescription = document.createElement('meta')
+      metaDescription.setAttribute('name', 'description')
+      document.head.appendChild(metaDescription)
+    }
+    metaDescription.setAttribute('content', description)
+  }, [currentPage])
+
+  const handleRowClick = (tx: Transaction) => {
+    setSelectedTransaction(tx)
     setFullPageTransaction(false)
     setDrawerOpen(true)
     void fetchTransactionDetail(transaction.id)
