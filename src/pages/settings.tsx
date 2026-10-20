@@ -12,6 +12,7 @@ import Layout from '@theme/Layout';
 import { FeatureFlagProvider, useFeatureFlag } from '@site/src/featureFlags';
 import { FeatureFlagSettings } from '@site/src/components/FeatureFlagSettings';
 import { FeatureFlagDebugPanel } from '@site/src/components/FeatureFlagDebugPanel';
+import { ColorSchemeSelector } from '@site/src/components/ColorSchemeSelector';
 
 /**
  * Lazy-load the dashboard-only components so they don't bloat the docs bundle.
@@ -50,6 +51,7 @@ export default function SettingsPage(): React.JSX.Element {
       title="Settings"
       description="Configure ProxyPay feature flags, API environment, and debug tools"
     >
+      <ColorSchemeSelector />
       <FeatureFlagProvider userId={userId}>
         {/* Existing feature-flag settings */}
         <FeatureFlagSettings />
