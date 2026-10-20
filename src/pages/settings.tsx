@@ -10,6 +10,7 @@ import Layout from '@theme/Layout';
 import { FeatureFlagProvider, useFeatureFlag } from '@site/src/featureFlags';
 import { FeatureFlagSettings } from '@site/src/components/FeatureFlagSettings';
 import { FeatureFlagDebugPanel } from '@site/src/components/FeatureFlagDebugPanel';
+import { ColorSchemeSelector } from '@site/src/components/ColorSchemeSelector';
 
 export default function SettingsPage(): React.JSX.Element {
   // In a real app this would come from an auth context / session
@@ -27,6 +28,7 @@ export default function SettingsPage(): React.JSX.Element {
       title="Settings — Feature Flags"
       description="Configure feature flags for ProxyPay"
     >
+      <ColorSchemeSelector />
       <FeatureFlagProvider userId={userId}>
         <FeatureFlagSettings />
         <DebugPanelGate />
