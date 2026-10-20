@@ -8,6 +8,8 @@
  * - Transaction count per provider
  * - Active filter indicator badges
  * - Accessible keyboard navigation
+ * - Issue #707: keeps a deep-linked selected operation addressable while
+ *   filters change — surfaces a one-action way to reveal it when hidden.
  */
 
 import React, { useRef, useState, useEffect } from 'react'
@@ -31,12 +33,21 @@ export interface ProviderFilterProps {
   transactions: Transaction[]
   /** Called whenever the selection changes */
   onChange: (providers: Provider[]) => void
+  /**
+   * Issue #707: provider of the currently deep-linked/selected operation.
+   * When active filters would hide it, we surface a one-action reveal.
+   */
+  selectedOperationProvider?: Provider | null
+  /** Called when the user asks to reveal the hidden selected operation */
+  onRevealSelectedOperation?: () => void
 }
 
 export const ProviderFilter: React.FC<ProviderFilterProps> = ({
   selectedProviders,
   transactions,
   onChange,
+  selectedOperationProvider = null,
+  onRevealSelectedOperation,
 }) => {
   const [open, setOpen] = useState(false)
   const containerRef = useRef<HTMLDivElement | null>(null)
@@ -74,6 +85,19 @@ export const ProviderFilter: React.FC<ProviderFilterProps> = ({
 
   const hasActiveFilters = selectedProviders.length > 0
 
+  // Issue #707: is the deep-linked operation hidden by the active filters?
+  const selectedOperationHidden =
+    selectedOperationProvider !== null &&
+    hasActiveFilters &&
+    !selectedProviders.includes(selectedOperationProvider)
+
+  const revealSelectedOperation = () => {
+    if (selectedOperationProvider && !selectedProviders.includes(selectedOperationProvider)) {
+      onChange([...selectedProviders, selectedOperationProvider])
+    }
+    onRevealSelectedOperation?.()
+  }
+
   return (
     <div className="provider-filter" ref={containerRef} data-testid="provider-filter">
       {/* Trigger button */}
@@ -94,6 +118,27 @@ export const ProviderFilter: React.FC<ProviderFilterProps> = ({
           {open ? '▲' : '▼'}
         </span>
       </button>
+
+      {/* Issue #707: selected operation hidden by active filters */}
+      {selectedOperationHidden && (
+        <div
+          className="provider-filter__hidden-selection"
+          role="status"
+          data-testid="provider-filter-hidden-selection"
+        >
+          <span className="provider-filter__hidden-selection-text">
+            Selected endpoint is hidden by active filters.
+          </span>
+          <button
+            type="button"
+            className="provider-filter__reveal"
+            onClick={revealSelectedOperation}
+            data-testid="provider-filter-reveal-selected"
+          >
+            Reveal selected
+          </button>
+        </div>
+      )}
 
       {/* Active filter badges */}
       {hasActiveFilters && (

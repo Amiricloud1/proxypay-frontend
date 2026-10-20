@@ -9,7 +9,7 @@ const isSpecUpdateNotification = (title: string): boolean =>
   title.toLowerCase().includes('spec') && title.toLowerCase().includes('update')
 
 export const NotificationCenter: React.FC = () => {
-  const { notifications, fetchNotifications, markNotificationRead } =
+  const { notifications, fetchNotifications, markNotificationRead, bulkMarkRead } =
     useNotificationStore()
   const [reloadStatus, setReloadStatus] = useState<string | null>(null)
 
@@ -20,6 +20,14 @@ export const NotificationCenter: React.FC = () => {
   }, [fetchNotifications])
 
   const unreadCount = notifications.filter((notification) => !notification.read).length
+  const unreadNotifications = notifications.filter((notification) => !notification.read)
+
+  const handleMarkAllAsRead = async () => {
+    const unreadIds = unreadNotifications.map((n) => n.id)
+    if (unreadIds.length > 0) {
+      await bulkMarkRead(unreadIds)
+    }
+  }
 
   const handleReloadSpec = (notificationId: string) => {
     const previousHash = window.location.hash

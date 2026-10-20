@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { Transaction, TransactionFilters, proxyPayAPI } from '../services/api'
+import { showRetryToast } from '../components/RetryToast'
 
 interface TransactionStore {
   transactions: Transaction[]
@@ -52,9 +53,24 @@ export const useTransactionStore = create<TransactionStore>((set) => ({
       })
     } catch (error) {
       if (requestId !== latestListRequest) return
-      set({
-        error: error instanceof Error ? error.message : 'Failed to fetch transactions',
-        loading: false,
+      const errorMessage =
+        error instanceof Error ? error.message : 'Failed to fetch transactions'
+      set({ error: errorMessage, loading: false })
+
+      // Issue #600 — show error toast with retry button
+      showRetryToast({
+        message: 'Failed to load transactions.',
+        label: 'GET /transactions',
+        onRetry: () => proxyPayAPI.getTransactions(filters),
+        onSuccess: (result) => {
+          set({
+            transactions: result.data,
+            total: result.total,
+            filters,
+            loading: false,
+            error: null,
+          })
+        },
       })
     }
   },
@@ -79,10 +95,18 @@ export const useTransactionStore = create<TransactionStore>((set) => ({
       })
     } catch (error) {
       if (requestId !== latestDetailRequest) return
-      set({
-        detailError:
-          error instanceof Error ? error.message : 'Failed to fetch transaction details',
-        detailLoading: false,
+      const errorMessage =
+        error instanceof Error ? error.message : 'Failed to fetch transaction details'
+      set({ detailError: errorMessage, detailLoading: false })
+
+      // Issue #600 — retry button for detail fetch failures
+      showRetryToast({
+        message: 'Failed to load transaction details.',
+        label: `GET /transactions/${id}`,
+        onRetry: () => proxyPayAPI.getTransactionDetail(id),
+        onSuccess: (transaction) => {
+          set({ selectedTransaction: transaction, detailLoading: false, detailError: null })
+        },
       })
     }
   },
