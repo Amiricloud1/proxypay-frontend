@@ -58,5 +58,5 @@ this file or configuring an equivalent edge/CDN policy.
 
 ## Handsoff notes
 
-<!-- handsoff-issue-696 -->
-- #696: Expand footer navigation to cover key resources
+<!-- handsoff-issue-718 -->
+- #718: Add response body copy and download actions

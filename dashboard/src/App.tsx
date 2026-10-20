@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { Profiler, useState, useEffect, useRef } from 'react'
 import { useTransactionStore } from './stores/transactionStore'
 import { TransactionsTable } from './components/TransactionsTable'
 import { TransactionDrawer } from './components/TransactionDrawer'
@@ -19,20 +19,8 @@ import './App.css'
 
 type Page = 'transactions' | 'reconciliation' | 'settings'
 
-const PAGE_METADATA: Record<Page, { title: string; description: string }> = {
-  transactions: {
-    title: 'Transactions | ProxyPay Dashboard',
-    description: 'Review, export, and manage your ProxyPay transaction history.',
-  },
-  reconciliation: {
-    title: 'Reconciliation | ProxyPay Dashboard',
-    description: 'Reconcile ProxyPay transactions against your settlement records.',
-  },
-  settings: {
-    title: 'Notification Settings | ProxyPay Dashboard',
-    description: 'Configure how and when ProxyPay sends you notifications.',
-  },
-}
+// Issue #717: reasonable timeout for in-flight detail requests (ms)
+const REQUEST_TIMEOUT_MS = 15000
 
 export default function App() {
   const [currentPage, setCurrentPage] = useState<Page>('transactions')
@@ -56,32 +44,61 @@ export default function App() {
   const { showWarning, secondsRemaining, extendSession, signOut } =
     useSessionExpiration(handleSessionExpired)
 
+  // Issue #717: track the in-flight detail request so it can be cancelled
+  const detailAbortRef = useRef<AbortController | null>(null)
+  const detailTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const clearDetailRequest = () => {
+    if (detailTimeoutRef.current) {
+      clearTimeout(detailTimeoutRef.current)
+      detailTimeoutRef.current = null
+    }
+    detailAbortRef.current = null
+  }
+
+  const cancelDetailRequest = () => {
+    if (detailAbortRef.current) {
+      detailAbortRef.current.abort()
+    }
+    clearDetailRequest()
+  }
+
+  // Initialize transactions on mount
   useEffect(() => {
     fetchTransactions(filters)
   }, [])
 
-  // Keep document title and meta description in sync with the active route
+  // Issue #717: abort any in-flight request on unmount
   useEffect(() => {
-    const { title, description } = PAGE_METADATA[currentPage]
-    document.title = title
-
-    let metaDescription = document.querySelector('meta[name="description"]')
-    if (!metaDescription) {
-      metaDescription = document.createElement('meta')
-      metaDescription.setAttribute('name', 'description')
-      document.head.appendChild(metaDescription)
+    return () => {
+      cancelDetailRequest()
     }
-    metaDescription.setAttribute('content', description)
-  }, [currentPage])
+  }, [])
 
   const handleRowClick = (tx: Transaction) => {
+    // Cancel any previous in-flight request before starting a new one
+    cancelDetailRequest()
+
+    const controller = new AbortController()
+    detailAbortRef.current = controller
+    detailTimeoutRef.current = setTimeout(() => {
+      controller.abort()
+    }, REQUEST_TIMEOUT_MS)
+
     setSelectedTransaction(tx)
     setFullPageTransaction(false)
     setDrawerOpen(true)
-    void fetchTransactionDetail(transaction.id)
+    void fetchTransactionDetail(tx.id, { signal: controller.signal }).finally(() => {
+      clearDetailRequest()
+    })
+  }
+
+  const handleCancelRequest = () => {
+    cancelDetailRequest()
   }
 
   const handleDrawerClose = () => {
+    cancelDetailRequest()
     setDrawerOpen(false)
     setFullPageTransaction(false)
     setTimeout(() => setSelectedTransaction(null), 300)
@@ -146,27 +163,29 @@ export default function App() {
                 <ReconciliationTab />
               </RenderProfiler>
             </div>
+          ) : currentPage === 'reconciliation' ? (
+            <div className="reconciliation-page">
+              <ReconciliationTab />
+            </div>
           ) : canManageNotifications ? (
             <div className="settings-page">
-              <RenderProfiler id="NotificationSettings">
-                <NotificationSettings />
-              </RenderProfiler>
+              <NotificationSettings />
             </div>
           ) : null}
-        </RenderProfiler>
+        </Profiler>
       </main>
 
-      <RenderProfiler id="TransactionDrawer">
-        <TransactionDrawer
-          transaction={selectedTransaction}
-          isOpen={drawerOpen}
-          loading={detailLoading}
-          error={detailError}
-          onClose={handleDrawerClose}
-          fullPage={fullPageTransaction}
-          onOpenFullPage={() => setFullPageTransaction(true)}
-        />
-      </RenderProfiler>
+      {/* Transaction Detail Drawer */}
+      <TransactionDrawer
+        transaction={selectedTransaction}
+        isOpen={drawerOpen}
+        loading={detailLoading}
+        error={detailError}
+        onClose={handleDrawerClose}
+        onCancel={handleCancelRequest}
+        fullPage={fullPageTransaction}
+        onOpenFullPage={() => setFullPageTransaction(true)}
+      />
       {showWarning && (
         <SessionExpirationDialog
           secondsRemaining={secondsRemaining}

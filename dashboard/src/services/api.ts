@@ -1,4 +1,4 @@
-import axios, { AxiosInstance, AxiosRequestConfig, CancelTokenSource } from 'axios'
+import axios, { AxiosInstance, AxiosError } from 'axios'
 import { recordPerformanceMetric } from './performance'
 import { useInterceptorLogStore } from '../stores/interceptorLogStore'
 import { useApiConfigStore } from '../stores/apiConfigStore'
@@ -168,34 +168,75 @@ export interface DashboardNotification {
   actionUrl?: string
 }
 
-/**
- * Resolve a root-relative path against the configured base URL so that
- * local resources stay inside the deployed project path (e.g. GitHub Pages
- * `/proxypay-frontend/`). Absolute URLs and already-prefixed paths are
- * returned unchanged.
- */
-export function resolveBaseUrl(path: string): string {
-  if (!path || /^([a-z][a-z0-9+.-]*:)?\/\//i.test(path)) {
-    return path
+export type ApiErrorKind = 'cancelled' | 'timeout' | 'network' | 'server' | 'client' | 'unknown'
+
+export class ApiError extends Error {
+  readonly kind: ApiErrorKind
+  readonly status?: number
+  readonly original?: unknown
+
+  constructor(kind: ApiErrorKind, message: string, status?: number, original?: unknown) {
+    super(message)
+    this.name = 'ApiError'
+    this.kind = kind
+    this.status = status
+    this.original = original
   }
-  const baseUrl = (import.meta.env.BASE_URL || '/').replace(/\/$/, '')
-  if (!baseUrl) {
-    return path
+
+  get isCancelled(): boolean {
+    return this.kind === 'cancelled'
   }
-  if (path === baseUrl || path.startsWith(`${baseUrl}/`)) {
-    return path
+
+  get isTimeout(): boolean {
+    return this.kind === 'timeout'
   }
-  return path.startsWith('/') ? `${baseUrl}${path}` : `${baseUrl}/${path}`
+
+  get isNetwork(): boolean {
+    return this.kind === 'network'
+  }
+
+  get isServer(): boolean {
+    return this.kind === 'server'
+  }
+}
+
+const DEFAULT_TIMEOUT_MS = 30_000
+
+export interface RequestOptions {
+  signal?: AbortSignal
+  timeoutMs?: number
+}
+
+function toApiError(error: unknown): ApiError {
+  if (error instanceof ApiError) return error
+  if (axios.isCancel(error)) {
+    return new ApiError('cancelled', 'Request was cancelled', undefined, error)
+  }
+  const axiosError = error as AxiosError | undefined
+  if (axiosError && axiosError.code === 'ECONNABORTED') {
+    return new ApiError('timeout', 'Request timed out', undefined, error)
+  }
+  if (axiosError && axiosError.response) {
+    const status = axiosError.response.status
+    const kind: ApiErrorKind = status >= 500 ? 'server' : 'client'
+    return new ApiError(kind, axiosError.message || `Request failed (${status})`, status, error)
+  }
+  if (axiosError && axiosError.request) {
+    return new ApiError('network', 'Network error — unable to reach server', undefined, error)
+  }
+  return new ApiError('unknown', (error as Error)?.message || 'Unknown error', undefined, error)
 }
 
 class ProxyPayAPI {
   private client: AxiosInstance
   private authToken: string | null = null
+  private inFlight = new Map<string, AbortController>()
 
   constructor(baseURL = resolveBaseUrl('/api')) {
     this.client = axios.create({
       baseURL: resolvedBase,
       withCredentials: true,
+      timeout: DEFAULT_TIMEOUT_MS,
       headers: {
         'Content-Type': 'application/json',
       },
@@ -304,50 +345,45 @@ class ProxyPayAPI {
             requestLogId.delete(axiosError.config)
           }
         }
-
-        return Promise.reject(error)
-      },
+        return Promise.reject(toApiError(error))
+      }
     )
   }
 
-  // ── #599: deduplicated GET helper ────────────────────────────────────────────
-  private async getDeduped<T>(
-    url: string,
-    config?: AxiosRequestConfig,
-  ): Promise<T> {
-    const key = requestKey('GET', url, config?.params)
-    const existing = inFlightRequests.get(key)
-
-    if (existing) {
-      // Mark the log entry that was just created by the request interceptor as
-      // deduplicated — we'll re-use the in-flight promise instead.
-      // The newest entry is at index 0 in the store.
-      const logStore = useInterceptorLogStore.getState()
-      const latestPendingId = logStore.entries.find(
-        (e) => e.url === url && e.status === 'pending',
-      )?.id
-      if (latestPendingId && latestPendingId !== existing.logId) {
-        logStore.markDeduplicated(latestPendingId)
+  /**
+   * Register an in-flight request so it can be cancelled by key.
+   * Returns the AbortSignal to pass to the request config.
+   */
+  private trackRequest(key: string, externalSignal?: AbortSignal): AbortSignal {
+    const controller = new AbortController()
+    this.inFlight.set(key, controller)
+    if (externalSignal) {
+      if (externalSignal.aborted) {
+        controller.abort()
+      } else {
+        externalSignal.addEventListener('abort', () => controller.abort(), { once: true })
       }
-      return existing.promise as Promise<T>
     }
+    return controller.signal
+  }
 
-    const cancelSource = axios.CancelToken.source()
-    const promise = this.client
-      .get<T>(url, { ...config, cancelToken: cancelSource.token })
-      .then((res) => res.data)
-      .finally(() => {
-        inFlightRequests.delete(key)
-      })
+  private releaseRequest(key: string): void {
+    this.inFlight.delete(key)
+  }
 
-    // Capture the log id of the request that just fired
-    const logId =
-      useInterceptorLogStore.getState().entries.find(
-        (e) => e.url === url && e.status === 'pending',
-      )?.id ?? ''
+  /** Cancel a specific in-flight request by key. */
+  cancelRequest(key: string): void {
+    const controller = this.inFlight.get(key)
+    if (controller) {
+      controller.abort()
+      this.inFlight.delete(key)
+    }
+  }
 
-    inFlightRequests.set(key, { promise, cancelSource, logId })
-    return promise
+  /** Cancel all in-flight requests. */
+  cancelAllRequests(): void {
+    this.inFlight.forEach((controller) => controller.abort())
+    this.inFlight.clear()
   }
 
   private unwrap<T>(payload: ApiPayload<T>): T {
@@ -357,23 +393,39 @@ class ProxyPayAPI {
     return payload as T
   }
 
-  async getTransactions(filters: TransactionFilters): Promise<{
+  async getTransactions(
+    filters: TransactionFilters,
+    options: RequestOptions = {}
+  ): Promise<{
     data: Transaction[]
     total: number
   }> {
-    // #599 — deduplicate identical in-flight list requests
-    return this.getDeduped<{ data: Transaction[]; total: number }>(
-      '/transactions',
-      { params: filters },
-    )
+    const key = 'getTransactions'
+    const signal = this.trackRequest(key, options.signal)
+    try {
+      const { data } = await this.client.get('/transactions', {
+        params: filters,
+        signal,
+        timeout: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+      })
+      return data
+    } finally {
+      this.releaseRequest(key)
+    }
   }
 
-  async getTransactionDetail(id: string): Promise<Transaction> {
-    // #599 — deduplicate identical detail requests
-    const raw = await this.getDeduped<ApiPayload<Transaction>>(
-      `/transactions/${encodeURIComponent(id)}`,
-    )
-    return this.unwrap<Transaction>(raw as ApiPayload<Transaction>)
+  async getTransactionDetail(id: string, options: RequestOptions = {}): Promise<Transaction> {
+    const key = `getTransactionDetail:${id}`
+    const signal = this.trackRequest(key, options.signal)
+    try {
+      const { data } = await this.client.get(`/transactions/${encodeURIComponent(id)}`, {
+        signal,
+        timeout: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+      })
+      return this.unwrap<Transaction>(data)
+    } finally {
+      this.releaseRequest(key)
+    }
   }
 
   async getStatusHistory(id: string): Promise<StatusTransition[]> {
@@ -455,43 +507,6 @@ class ProxyPayAPI {
       schedule
     )
     return this.unwrap<ExportSchedule>(data)
-  }
-
-  async deleteExportSchedule(id: string): Promise<void> {
-    await this.client.delete(
-      `/transactions/exports/schedules/${encodeURIComponent(id)}`
-    )
-  }
-
-  async runExportSchedule(id: string): Promise<ScheduledExport> {
-    const { data } = await this.client.post(
-      `/transactions/exports/schedules/${encodeURIComponent(id)}/run`
-    )
-    return this.unwrap<ScheduledExport>(data)
-  }
-
-  async getNotificationConfig(): Promise<NotificationConfig> {
-    const { data } = await this.client.get('/notifications/config')
-    return this.unwrap<NotificationConfig>(data)
-  }
-
-  async updateNotificationConfig(
-    config: NotificationConfig
-  ): Promise<NotificationConfig> {
-    const { data } = await this.client.put('/notifications/config', config)
-    return this.unwrap<NotificationConfig>(data)
-  }
-
-  async getNotifications(): Promise<DashboardNotification[]> {
-    const { data } = await this.client.get('/notifications')
-    return this.unwrap<DashboardNotification[]>(data) || []
-  }
-
-  async markNotificationRead(id: string): Promise<DashboardNotification> {
-    const { data } = await this.client.post(
-      `/notifications/${encodeURIComponent(id)}/read`
-    )
-    return this.unwrap<DashboardNotification>(data)
   }
 }
 
