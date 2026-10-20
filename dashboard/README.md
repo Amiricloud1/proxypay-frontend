@@ -38,9 +38,11 @@ A modern React-based dashboard for viewing transaction history, exporting data a
 - User values are keyed by `auth_user_id` or a JWT `sub` claim; session values use `sessionStorage`
 
 ### ⚡ Performance Monitoring
-- Track page load, LCP, CLS, INP, API response, and React commit duration
+- Track page load, LCP, CLS, INP, API response, and component render duration
 - Review persisted seven-day response trends and threshold alerts
 - Forward metrics to Datadog when the host application exposes `window.DD_RUM.addAction`
+- In development, open the floating component profiler to inspect per-component average, latest, and maximum render times, renders per minute, and targeted recommendations
+- Profile additional component hierarchies by wrapping them in `RenderProfiler` with a descriptive component name
 
 ## Technology Stack
 
@@ -87,6 +89,36 @@ npm run preview
 npm run lint          # ESLint
 npm run type-check    # TypeScript
 ```
+
+## Dashboard Entry Point
+
+The dashboard is a **separate Vite application** from the portal. Portal users reach it through a clearly labeled link that is driven by the `VITE_DASHBOARD_URL` environment variable.
+
+### Intended deployment URL
+
+Set `VITE_DASHBOARD_URL` in the portal's deployment environment to the dashboard's deployed origin (for example `https://dashboard.proxypay.example`). The portal reads this value at build time and renders a **“Open Dashboard”** link pointing to it.
+
+```bash
+# portal .env / deployment config
+VITE_DASHBOARD_URL=https://dashboard.proxypay.example
+```
+
+### Local development
+
+When running the dashboard locally, point the portal at the Vite dev server:
+
+```bash
+VITE_DASHBOARD_URL=http://localhost:3000
+```
+
+### Fallback when the dashboard is not deployed
+
+If `VITE_DASHBOARD_URL` is unset or empty, the portal does **not** render a broken link. Instead it shows an environment-aware fallback: a disabled “Dashboard unavailable” state with guidance to configure `VITE_DASHBOARD_URL` (in development) or contact an administrator (in production).
+
+### Validating the entry point
+
+- **Manual**: confirm the portal link resolves to the configured `VITE_DASHBOARD_URL` and that the dashboard loads.
+- **Playwright**: assert the portal renders the labeled dashboard link when `VITE_DASHBOARD_URL` is set, and the disabled fallback state when it is not.
 
 ## Project Structure
 

@@ -55,3 +55,14 @@ and Netlify). GitHub Pages does not apply `_headers` or allow custom response
 headers, so this policy is not enforced at runtime while the site remains on
 GitHub Pages. Runtime enforcement requires deploying to a host that consumes
 this file or configuring an equivalent edge/CDN policy.
+
+## Handsoff notes
+
+<!-- handsoff-issue-700 -->
+- #700: Render endpoints tagged in multiple groups
+
+<!-- handsoff-issue-701 -->
+- #701: Populate tag descriptions in the sidebar
+
+<!-- handsoff-issue-702 -->
+- #702: Support composed schemas in generated examples

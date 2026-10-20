@@ -1,5 +1,7 @@
 import React from 'react'
 import * as Sentry from '@sentry/react'
+import { captureScreenshot, storeScreenshot } from '../services/screenshotCapture'
+import { ErrorScreenshotDialog } from './ErrorScreenshotDialog'
 
 interface DashboardErrorBoundaryProps {
   children: React.ReactNode
@@ -8,16 +10,23 @@ interface DashboardErrorBoundaryProps {
 interface DashboardErrorBoundaryState {
   error: Error | null
   eventId: string | null
+  screenshotDataUrl: string | null
+  showScreenshotDialog: boolean
 }
 
 export class DashboardErrorBoundary extends React.Component<
   DashboardErrorBoundaryProps,
   DashboardErrorBoundaryState
 > {
-  state: DashboardErrorBoundaryState = { error: null, eventId: null }
+  state: DashboardErrorBoundaryState = {
+    error: null,
+    eventId: null,
+    screenshotDataUrl: null,
+    showScreenshotDialog: false,
+  }
 
-  static getDerivedStateFromError(error: Error): DashboardErrorBoundaryState {
-    return { error, eventId: null }
+  static getDerivedStateFromError(error: Error): Partial<DashboardErrorBoundaryState> {
+    return { error, eventId: null, screenshotDataUrl: null, showScreenshotDialog: false }
   }
 
   componentDidCatch(error: Error, info: React.ErrorInfo) {
@@ -38,11 +47,25 @@ export class DashboardErrorBoundary extends React.Component<
       scope.setFingerprint(['{{ default }}', 'DashboardApp'])
       eventId = Sentry.captureException(error)
     })
-    this.setState({ eventId: eventId ?? null })
+    const capturedEventId = eventId ?? null
+    this.setState({ eventId: capturedEventId })
+
+    // Capture and store screenshot asynchronously
+    const errorId = capturedEventId ?? `error-${Date.now()}`
+    captureScreenshot()
+      .then((dataUrl) => {
+        if (dataUrl) {
+          storeScreenshot(errorId, dataUrl)
+          this.setState({ screenshotDataUrl: dataUrl })
+        }
+      })
+      .catch((err) => {
+        console.warn('Screenshot capture failed', err)
+      })
   }
 
   render() {
-    const { error, eventId } = this.state
+    const { error, eventId, screenshotDataUrl, showScreenshotDialog } = this.state
     if (!error) return this.props.children
 
     return (
@@ -56,7 +79,14 @@ export class DashboardErrorBoundary extends React.Component<
           <div className="dashboard-error-boundary__actions">
             <button
               type="button"
-              onClick={() => this.setState({ error: null, eventId: null })}
+              onClick={() =>
+                this.setState({
+                  error: null,
+                  eventId: null,
+                  screenshotDataUrl: null,
+                  showScreenshotDialog: false,
+                })
+              }
             >
               Try again
             </button>
@@ -65,6 +95,12 @@ export class DashboardErrorBoundary extends React.Component<
                 Send feedback
               </button>
             )}
+            <button
+              type="button"
+              onClick={() => this.setState({ showScreenshotDialog: true })}
+            >
+              View Screenshot
+            </button>
           </div>
           {!import.meta.env.VITE_SENTRY_DSN && (
             <p className="dashboard-error-boundary__note">
@@ -72,6 +108,14 @@ export class DashboardErrorBoundary extends React.Component<
             </p>
           )}
         </section>
+
+        <ErrorScreenshotDialog
+          isOpen={showScreenshotDialog}
+          onClose={() => this.setState({ showScreenshotDialog: false })}
+          errorMessage={error.message}
+          timestamp={new Date().toISOString()}
+          screenshotDataUrl={screenshotDataUrl ?? undefined}
+        />
       </main>
     )
   }

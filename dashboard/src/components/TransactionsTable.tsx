@@ -4,16 +4,25 @@ import { ChevronDown, ChevronUp, RefreshCw } from 'lucide-react'
 import { TableVirtuoso, type TableVirtuosoHandle } from 'react-virtuoso'
 import { useTransactionStore } from '../stores/transactionStore'
 import { trackFeatureFlagEvaluation, useFeatureFlagStore } from '../stores/featureFlagStore'
+import { useViewPreferencesStore } from '../stores/viewPreferencesStore'
+import { ViewPreferencesPanel } from './ViewPreferencesPanel'
 import { Transaction } from '../services/api'
 import { TransactionTableSkeleton } from './TransactionTableSkeleton'
 import { TransactionSearch, matchesSearch, HighlightMatch } from './TransactionSearch'
 import { DateRangePicker, DateRange, matchesDateRange } from './DateRangePicker'
 import { StatusFilter, TransactionStatus, matchesStatus } from './StatusFilter'
+import { TransactionRowPreview } from './TransactionRowPreview'
+import { usePreviewState } from '../hooks/usePreviewState'
 import '../styles/TransactionsTable.css'
 
 interface SortState {
   column: keyof Transaction | null
   direction: 'asc' | 'desc'
+}
+
+interface TransactionPreviewPosition {
+  top: number
+  left: number
 }
 
 interface PreviewState {
@@ -170,8 +179,9 @@ export const TransactionsTable: React.FC<{
   onRowClick: (tx: Transaction) => void
 }> = ({ onRowClick }) => {
   const { transactions, loading, error, fetchTransactions } = useTransactionStore()
+  const { preferences: viewPrefs, setSortColumn, setSortDirection, resetToDefaults } = useViewPreferencesStore()
 
-  const [sort, setSort] = useState<SortState>({ column: null, direction: 'asc' })
+  const [sort, setSort] = useState<SortState>({ column: (viewPrefs.sortColumn as keyof Transaction) || null, direction: viewPrefs.sortDirection })
   const [preview, setPreview] = useState<PreviewState | null>(null)
   /** #495 — Multi-select provider filter state (persisted in component state) */
   const [selectedProviders, setSelectedProviders] = useState<Provider[]>([])
@@ -181,7 +191,9 @@ export const TransactionsTable: React.FC<{
   const previewTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const touchTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const longPressTriggered = useRef(false)
-  const skipInitialFetch = useRef(!loadOnMount)
+  const virtuosoRef = useRef<TableVirtuosoHandle>(null)
+  const pendingFocusIndex = useRef<number | null>(null)
+  const previewContainerRef = useRef<HTMLDivElement>(null)
 
   // ── Filter state ────────────────────────────────────────────────────────────
   const [searchQuery, setSearchQuery] = useState('')
@@ -193,8 +205,6 @@ export const TransactionsTable: React.FC<{
   const [selectedStatuses, setSelectedStatuses] = useState<TransactionStatus[]>([])
 
   // ── Fetch on mount — pass empty filters so store defaults are preserved ─────
-  // App.tsx also calls fetchTransactions; we avoid a double fetch by relying on
-  // the store's loading flag.  If the store already has data, skip the call.
   useEffect(() => {
     if (transactions.length === 0) {
       fetchTransactions({})
@@ -227,11 +237,12 @@ export const TransactionsTable: React.FC<{
 
   // ── Sorting ─────────────────────────────────────────────────────────────────
   const handleSort = (column: keyof Transaction) => {
-    setSort((prev) => ({
-      column,
-      direction:
-        prev.column === column && prev.direction === 'asc' ? 'desc' : 'asc',
-    }))
+    setSort((prev) => {
+      const newDir = prev.column === column && prev.direction === 'asc' ? 'desc' : 'asc'
+      setSortColumn(column)
+      setSortDirection(newDir)
+      return { column, direction: newDir }
+    })
   }
 
   // ── Filter callbacks (stable references via useCallback) ────────────────────
