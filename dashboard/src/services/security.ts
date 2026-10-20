@@ -1,128 +1,136 @@
-export interface ExternalUrlValidation {
-  url: URL
-  trusted: boolean
+import yaml from 'js-yaml';
+
+export interface SecurityScheme {
+  type: string;
+  description?: string;
+  name?: string;
+  in?: string;
+  scheme?: string;
+  bearerFormat?: string;
+  flows?: Record<string, unknown>;
+  openIdConnectUrl?: string;
 }
 
-export interface CorsDiagnostic {
-  checkedAt: string
-  allowOrigin: string | null
-  allowCredentials: boolean
-  status: 'permissive' | 'restricted' | 'unavailable'
+export interface SecurityRequirement {
+  [schemeName: string]: string[];
 }
 
-let lastCorsDiagnostic: CorsDiagnostic | null = null
-const corsDiagnosticListeners = new Set<(diagnostic: CorsDiagnostic) => void>()
+export interface ParsedSecurity {
+  schemes: Record<string, SecurityScheme>;
+  globalRequirements: SecurityRequirement[];
+}
 
-export function validateExternalUrl(
-  value: string,
-  currentOrigin: string,
-  trustedDomains: readonly string[] = []
-): ExternalUrlValidation | null {
-  try {
-    const origin = new URL(currentOrigin)
-    const url = new URL(value, origin)
-    const sameOrigin = url.origin === origin.origin
-    if ((!sameOrigin && url.protocol !== 'https:') || url.username || url.password) return null
+export class ExternalReferenceError extends Error {
+  readonly reference: string;
 
-    const trusted =
-      sameOrigin ||
-      trustedDomains.some((domain) => {
-        const normalizedDomain = domain.trim().toLowerCase().replace(/^\.+|\.+$/g, '')
-        const hostname = url.hostname.toLowerCase()
-        return hostname === normalizedDomain || hostname.endsWith(`.${normalizedDomain}`)
-      })
-
-    return { url, trusted }
-  } catch {
-    return null
+  constructor(reference: string) {
+    super(
+      `Unsupported external OpenAPI reference: "${reference}". ` +
+        'Only local references (starting with "#/") can be resolved; ' +
+        'inline the referenced content or bundle the spec before loading it.',
+    );
+    this.name = 'ExternalReferenceError';
+    this.reference = reference;
   }
 }
 
-export function sanitizeErrorMessage(error: unknown, secret?: string): string {
-  const message = error instanceof Error ? error.message : 'An unexpected error occurred'
-  const sanitized = message
-    .replace(/(bearer\s+)[^\s,;]+/gi, '$1[REDACTED]')
-    .replace(/((?:api[_-]?key|token)[=:]\s*)[^\s&,;]+/gi, '$1[REDACTED]')
-  return secret ? sanitized.split(secret).join('[REDACTED]') : sanitized
+function isExternalRef(ref: unknown): ref is string {
+  return typeof ref === 'string' && ref.length > 0 && !ref.startsWith('#/');
 }
 
 /**
- * Authorization headers are secrets. Keep them out of persisted request
- * history and out of URLs/query strings so they cannot be shoulder-surfed
- * or accidentally copied.
+ * Walks the parsed spec and throws on the first external `$ref` encountered,
+ * so callers never render partially resolved content as if it were complete.
  */
-export function redactAuthorizationForHistory(
-  headers: Record<string, string> | undefined
-): Record<string, string> {
-  if (!headers) return {}
-  return Object.fromEntries(
-    Object.entries(headers).map(([name, value]) =>
-      name.toLowerCase() === 'authorization' ? [name, '[REDACTED]'] : [name, value]
-    )
-  )
+export function assertNoExternalRefs(node: unknown, seen: Set<unknown> = new Set()): void {
+  if (node === null || typeof node !== 'object') {
+    return;
+  }
+  if (seen.has(node)) {
+    return;
+  }
+  seen.add(node);
+
+  if (Array.isArray(node)) {
+    for (const item of node) {
+      assertNoExternalRefs(item, seen);
+    }
+    return;
+  }
+
+  const record = node as Record<string, unknown>;
+  if (isExternalRef(record.$ref)) {
+    throw new ExternalReferenceError(record.$ref);
+  }
+
+  for (const value of Object.values(record)) {
+    assertNoExternalRefs(value, seen);
+  }
 }
 
-/**
- * Strip any authorization value that may have leaked into a URL or query
- * string before it is displayed, copied, or persisted.
- */
-export function stripAuthorizationFromUrl(value: string): string {
-  try {
-    const url = new URL(value, 'http://localhost')
-    let changed = false
-    for (const key of Array.from(url.searchParams.keys())) {
-      if (/^(authorization|auth|token|api[_-]?key)$/i.test(key)) {
-        url.searchParams.delete(key)
-        changed = true
+function resolveLocalRef(spec: unknown, ref: string): unknown {
+  const segments = ref
+    .slice(2)
+    .split('/')
+    .map((segment) => segment.replace(/~1/g, '/').replace(/~0/g, '~'));
+
+  let current: unknown = spec;
+  for (const segment of segments) {
+    if (current === null || typeof current !== 'object') {
+      return undefined;
+    }
+    current = (current as Record<string, unknown>)[segment];
+  }
+  return current;
+}
+
+function resolveSecurityScheme(spec: unknown, scheme: unknown): SecurityScheme | undefined {
+  if (scheme === null || typeof scheme !== 'object') {
+    return undefined;
+  }
+  const record = scheme as Record<string, unknown>;
+  if (isExternalRef(record.$ref)) {
+    throw new ExternalReferenceError(record.$ref);
+  }
+  if (typeof record.$ref === 'string') {
+    const resolved = resolveLocalRef(spec, record.$ref);
+    if (resolved === null || typeof resolved !== 'object') {
+      return undefined;
+    }
+    return resolved as SecurityScheme;
+  }
+  return record as SecurityScheme;
+}
+
+export function parseSecuritySchemes(specText: string): ParsedSecurity {
+  const spec = yaml.load(specText);
+
+  if (spec === null || typeof spec !== 'object') {
+    return { schemes: {}, globalRequirements: [] };
+  }
+
+  assertNoExternalRefs(spec);
+
+  const record = spec as Record<string, unknown>;
+  const components = record.components;
+  const rawSchemes =
+    components !== null && typeof components === 'object'
+      ? (components as Record<string, unknown>).securitySchemes
+      : undefined;
+
+  const schemes: Record<string, SecurityScheme> = {};
+  if (rawSchemes !== null && typeof rawSchemes === 'object') {
+    for (const [name, scheme] of Object.entries(rawSchemes as Record<string, unknown>)) {
+      const resolved = resolveSecurityScheme(spec, scheme);
+      if (resolved) {
+        schemes[name] = resolved;
       }
     }
-    if (url.username || url.password) {
-      url.username = ''
-      url.password = ''
-      changed = true
-    }
-    return changed ? url.toString() : value
-  } catch {
-    return value
   }
-}
 
-export function getCorsDiagnostic(): CorsDiagnostic | null {
-  return lastCorsDiagnostic
-}
+  const globalRequirements: SecurityRequirement[] = Array.isArray(record.security)
+    ? (record.security as SecurityRequirement[])
+    : [];
 
-export function subscribeCorsDiagnostic(
-  listener: (diagnostic: CorsDiagnostic) => void
-): () => void {
-  corsDiagnosticListeners.add(listener)
-  return () => corsDiagnosticListeners.delete(listener)
-}
-
-export function inspectCorsHeaders(
-  headers: Record<string, unknown>,
-  expectedOrigin: string
-): CorsDiagnostic {
-  const normalizedHeaders = Object.fromEntries(
-    Object.entries(headers)
-      .filter(([, value]) => value !== undefined && value !== null && value !== '')
-      .map(([name, value]) => [name.toLowerCase(), String(value)])
-  )
-  const allowOrigin = normalizedHeaders['access-control-allow-origin'] || null
-  const allowCredentials = normalizedHeaders['access-control-allow-credentials']?.toLowerCase() === 'true'
-  const status: CorsDiagnostic['status'] =
-    allowOrigin === '*'
-      ? 'permissive'
-      : allowOrigin === expectedOrigin
-        ? 'restricted'
-        : 'unavailable'
-
-  const diagnostic = {
-    checkedAt: new Date().toISOString(),
-    allowOrigin,
-    allowCredentials,
-    status,
-  }
-  lastCorsDiagnostic = diagnostic
-  corsDiagnosticListeners.forEach((listener) => listener(diagnostic))
-  return diagnostic
+  return { schemes, globalRequirements };
 }
