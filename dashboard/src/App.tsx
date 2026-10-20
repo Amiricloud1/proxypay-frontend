@@ -7,6 +7,10 @@ import { ExportButton } from './components/ExportButton'
 import { NotificationSettings } from './components/NotificationSettings'
 import { NotificationCenter } from './components/NotificationCenter'
 import { canAccess } from './auth/access'
+// Issue #598 — environment badge in header
+import { EnvironmentBadge } from './components/ApiEnvironmentSettings'
+// Issue #600 — retry status panel
+import { RetryStatusPanel } from './components/RetryToast'
 import './App.css'
 
 type Page = 'transactions' | 'reconciliation' | 'settings'
@@ -53,11 +57,15 @@ export default function App() {
     <div className="app">
       {/* Global toast notifications — Issue #447 */}
       <ToastNotifications />
+      {/* Issue #600 — retry status panel for failed API calls */}
+      <RetryStatusPanel />
 
       {/* Header Navigation */}
       <header className="app-header">
         <div className="header-content">
           <h1 className="app-title">ProxyPay Dashboard</h1>
+          {/* Issue #598 — show active environment when not on production */}
+          <EnvironmentBadge />
           <NotificationCenter />
           <nav className="nav-tabs">
             <button
