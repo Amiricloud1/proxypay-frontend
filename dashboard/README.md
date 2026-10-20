@@ -38,9 +38,11 @@ A modern React-based dashboard for viewing transaction history, exporting data a
 - User values are keyed by `auth_user_id` or a JWT `sub` claim; session values use `sessionStorage`
 
 ### ⚡ Performance Monitoring
-- Track page load, LCP, CLS, INP, API response, and React commit duration
+- Track page load, LCP, CLS, INP, API response, and component render duration
 - Review persisted seven-day response trends and threshold alerts
 - Forward metrics to Datadog when the host application exposes `window.DD_RUM.addAction`
+- In development, open the floating component profiler to inspect per-component average, latest, and maximum render times, renders per minute, and targeted recommendations
+- Profile additional component hierarchies by wrapping them in `RenderProfiler` with a descriptive component name
 
 ## Technology Stack
 
