@@ -1,5 +1,7 @@
 import axios, { AxiosInstance, AxiosError } from 'axios'
 import { recordPerformanceMetric } from './performance'
+import { useInterceptorLogStore } from '../stores/interceptorLogStore'
+import { useApiConfigStore } from '../stores/apiConfigStore'
 
 export type TransactionStatus =
   | 'pending'
@@ -230,9 +232,9 @@ class ProxyPayAPI {
   private authToken: string | null = null
   private inFlight = new Map<string, AbortController>()
 
-  constructor(baseURL = '/api') {
+  constructor(baseURL = resolveBaseUrl('/api')) {
     this.client = axios.create({
-      baseURL,
+      baseURL: resolvedBase,
       withCredentials: true,
       timeout: DEFAULT_TIMEOUT_MS,
       headers: {
@@ -240,36 +242,108 @@ class ProxyPayAPI {
       },
     })
 
-    const token = localStorage.getItem('auth_token')
+    const token = typeof localStorage !== 'undefined'
+      ? localStorage.getItem('auth_token')
+      : null
     if (token) {
       this.client.defaults.headers.common['Authorization'] = `Bearer ${token}`
     }
 
-    const requestStartedAt = new WeakMap<object, number>()
-    const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now())
-    const recordResponseTime = (config?: object & { url?: string; method?: string }) => {
-      if (!config) return
-      const startedAt = requestStartedAt.get(config)
-      if (startedAt === undefined) return
-      requestStartedAt.delete(config)
-      recordPerformanceMetric('api-response', now() - startedAt, {
-        endpoint: config.url || 'unknown',
-        method: (config.method || 'get').toUpperCase(),
-      })
-    }
+    // ── Subscribe to base-URL changes so the client stays in sync (#598) ─────
+    useApiConfigStore.subscribe((state) => {
+      const newBase = state.getEffectiveBaseUrl()
+      if (this.client.defaults.baseURL !== newBase) {
+        this.client.defaults.baseURL = newBase
+      }
+    })
 
+    const requestStartedAt = new WeakMap<object, number>()
+    // Maps config → interceptor log entry id (#597)
+    const requestLogId = new WeakMap<object, string>()
+    const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now())
+
+    // ── Request interceptor: timing + logging (#597) ──────────────────────────
     this.client.interceptors.request.use((config) => {
-      requestStartedAt.set(config, now())
+      const startMs = now()
+      requestStartedAt.set(config, startMs)
+
+      // #597 — log the outgoing request
+      const logStore = useInterceptorLogStore.getState()
+      const rawHeaders = config.headers
+        ? Object.fromEntries(
+            Object.entries(config.headers).filter(
+              ([, v]) => v !== undefined && v !== null,
+            ) as [string, string][],
+          )
+        : {}
+      const logId = logStore.addRequest(
+        config.method ?? 'get',
+        config.url ?? '',
+        (config.params as Record<string, unknown>) ?? {},
+        rawHeaders,
+      )
+      requestLogId.set(config, logId)
+
       return config
     })
+
+    // ── Response interceptor: timing + logging (#597) ─────────────────────────
     this.client.interceptors.response.use(
       (response) => {
-        recordResponseTime(response.config)
+        const startMs = requestStartedAt.get(response.config)
+        const durationMs = startMs !== undefined ? now() - startMs : 0
+        requestStartedAt.delete(response.config)
+
+        recordPerformanceMetric('api-response', durationMs, {
+          endpoint: response.config.url || 'unknown',
+          method: (response.config.method || 'get').toUpperCase(),
+        })
+
+        // #597 — resolve the log entry
+        const logId = requestLogId.get(response.config)
+        if (logId) {
+          const responseHeaders: Record<string, string> = {}
+          if (response.headers) {
+            Object.entries(response.headers).forEach(([k, v]) => {
+              if (typeof v === 'string') responseHeaders[k] = v
+            })
+          }
+          useInterceptorLogStore
+            .getState()
+            .resolveRequest(logId, response.status, responseHeaders, durationMs)
+          requestLogId.delete(response.config)
+        }
+
         return response
       },
       (error: unknown) => {
-        if (error && typeof error === 'object' && 'config' in error) {
-          recordResponseTime((error as { config?: object }).config)
+        const axiosError = error as {
+          config?: AxiosRequestConfig & object
+          response?: { status?: number; headers?: Record<string, string> }
+          message?: string
+        }
+
+        if (axiosError.config) {
+          const startMs = requestStartedAt.get(axiosError.config)
+          const durationMs = startMs !== undefined ? now() - startMs : 0
+          requestStartedAt.delete(axiosError.config)
+
+          recordPerformanceMetric('api-response', durationMs, {
+            endpoint: axiosError.config.url || 'unknown',
+            method: (axiosError.config.method || 'get').toUpperCase(),
+          })
+
+          // #597 — reject the log entry
+          const logId = requestLogId.get(axiosError.config)
+          if (logId) {
+            useInterceptorLogStore.getState().rejectRequest(
+              logId,
+              axiosError.message ?? 'Request failed',
+              durationMs,
+              axiosError.response?.status,
+            )
+            requestLogId.delete(axiosError.config)
+          }
         }
         return Promise.reject(toApiError(error))
       }

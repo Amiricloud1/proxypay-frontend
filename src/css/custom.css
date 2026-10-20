@@ -4334,3 +4334,70 @@ body {
     transform: none !important;
   }
 }
+
+/* ============================================================
+   Issue #622 — Collapsible Transaction Detail Sections
+   ============================================================ */
+
+.txn-section {
+  margin-bottom: 0.5rem;
+  border: 1px solid var(--ifm-color-emphasis-200);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.txn-section__header {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  width: 100%;
+  background: var(--ifm-color-emphasis-100);
+  border: none;
+  cursor: pointer;
+  padding: 0.75rem 1rem;
+  font-size: 1rem;
+  font-weight: 600;
+  text-align: left;
+  transition: background 0.15s ease;
+}
+
+.txn-section__header:hover {
+  background: var(--ifm-color-emphasis-200);
+}
+
+/* Highlight expanded section header with a coloured left border */
+.txn-section--expanded > .txn-section__header {
+  border-left: 4px solid var(--ifm-color-primary);
+  background: rgba(46, 133, 85, 0.08);
+}
+
+.txn-section__arrow {
+  display: inline-block;
+  font-size: 0.75rem;
+  transition: transform 0.25s ease;
+  /* collapsed by default — pointing right (▶) */
+  transform: rotate(0deg);
+}
+
+.txn-section__arrow--open {
+  transform: rotate(90deg);
+}
+
+.txn-section__label {
+  flex: 1;
+}
+
+/* Collapse/expand animation via max-height trick */
+.txn-section__body {
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height 0.3s ease;
+}
+
+.txn-section__body--visible {
+  max-height: 1000px; /* large enough for any realistic content */
+}
+
+.txn-section__content {
+  padding: 0.75rem 1rem 1rem;
+}
