@@ -1,9 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { format } from 'date-fns'
-import { ChevronDown, ChevronUp } from 'lucide-react'
+import { ChevronDown, ChevronUp, RotateCcw, Settings } from 'lucide-react'
 import { TableVirtuoso, type TableVirtuosoHandle } from 'react-virtuoso'
 import { useTransactionStore } from '../stores/transactionStore'
 import { trackFeatureFlagEvaluation, useFeatureFlagStore } from '../stores/featureFlagStore'
+import { useViewPreferencesStore } from '../stores/viewPreferencesStore'
+import { ViewPreferencesPanel } from './ViewPreferencesPanel'
 import { Transaction } from '../services/api'
 import { TransactionTableSkeleton } from './TransactionTableSkeleton'
 import { TransactionSearch, matchesSearch, HighlightMatch } from './TransactionSearch'
@@ -62,9 +64,11 @@ export const TransactionsTable: React.FC<{
   onRowClick: (tx: Transaction) => void
 }> = ({ onRowClick }) => {
   const { transactions, loading, error, fetchTransactions } = useTransactionStore()
+  const { preferences: viewPrefs, setSortColumn, setSortDirection, resetToDefaults } = useViewPreferencesStore()
 
-  const [sort, setSort] = useState<SortState>({ column: null, direction: 'asc' })
+  const [sort, setSort] = useState<SortState>({ column: (viewPrefs.sortColumn as keyof Transaction) || null, direction: viewPrefs.sortDirection })
   const [preview, setPreview] = useState<PreviewState | null>(null)
+  const [preferencesOpen, setPreferencesOpen] = useState(false)
   /** #495 — Multi-select provider filter state (persisted in component state) */
   const [selectedProviders, setSelectedProviders] = useState<Provider[]>([])
   const previewTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -93,11 +97,12 @@ export const TransactionsTable: React.FC<{
 
   // ── Sorting ─────────────────────────────────────────────────────────────────
   const handleSort = (column: keyof Transaction) => {
-    setSort((prev) => ({
-      column,
-      direction:
-        prev.column === column && prev.direction === 'asc' ? 'desc' : 'asc',
-    }))
+    setSort((prev) => {
+      const newDir = prev.column === column && prev.direction === 'asc' ? 'desc' : 'asc'
+      setSortColumn(column)
+      setSortDirection(newDir)
+      return { column, direction: newDir }
+    })
   }
 
   // ── Filter callbacks (stable references via useCallback) ────────────────────
@@ -112,6 +117,11 @@ export const TransactionsTable: React.FC<{
   const handleStatusChange = useCallback((statuses: TransactionStatus[]) => {
     setSelectedStatuses(statuses)
   }, [])
+
+  const handleResetViewPreferences = useCallback(() => {
+    resetToDefaults()
+    setSort({ column: null, direction: 'asc' })
+  }, [resetToDefaults])
 
   // ── Composed filtering + sorting (AND logic) ─────────────────────────────────
   const filteredAndSorted = useMemo(() => {
@@ -255,6 +265,23 @@ export const TransactionsTable: React.FC<{
             transactions={transactions ?? []}
             onStatusChange={handleStatusChange}
           />
+          <button
+            className="preferences-button"
+            onClick={() => setPreferencesOpen(true)}
+            title="Open view preferences"
+            aria-label="View preferences and column settings"
+          >
+            <Settings size={16} />
+          </button>
+          <button
+            className="reset-preferences-button"
+            onClick={handleResetViewPreferences}
+            title="Reset sort order and page size to defaults"
+            aria-label="Reset view preferences"
+          >
+            <RotateCcw size={16} />
+            <span>Reset View</span>
+          </button>
         </div>
       </div>
 
@@ -419,6 +446,10 @@ export const TransactionsTable: React.FC<{
           visible
         />
       )}
+      <ViewPreferencesPanel
+        isOpen={preferencesOpen}
+        onClose={() => setPreferencesOpen(false)}
+      />
     </>
   )
 }
