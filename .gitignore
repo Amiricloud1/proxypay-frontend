@@ -57,3 +57,12 @@ coverage/
 # Environment files
 .env.local
 .env.*.local
+
+# Quality / audit reports
+.quality-reports/
+
+# Playwright visual snapshots and test results
+test-results/
+playwright-report/
+**/__screenshots__/
+*.png.diff
