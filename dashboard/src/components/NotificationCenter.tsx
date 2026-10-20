@@ -1,11 +1,12 @@
-import React, { useEffect } from 'react'
-import { Bell, Check } from 'lucide-react'
+import React, { useEffect, useState } from 'react'
+import { Bell, Check, CheckCheck } from 'lucide-react'
 import { useNotificationStore } from '../stores/notificationStore'
 import { getSafeNotificationUrl } from '../utils/safeNavigation'
 
 export const NotificationCenter: React.FC = () => {
-  const { notifications, fetchNotifications, markNotificationRead } =
+  const { notifications, fetchNotifications, markNotificationRead, bulkMarkRead } =
     useNotificationStore()
+  const [isSelecting, setIsSelecting] = useState(false)
 
   useEffect(() => {
     fetchNotifications()
@@ -14,6 +15,14 @@ export const NotificationCenter: React.FC = () => {
   }, [fetchNotifications])
 
   const unreadCount = notifications.filter((notification) => !notification.read).length
+  const unreadNotifications = notifications.filter((notification) => !notification.read)
+
+  const handleMarkAllAsRead = async () => {
+    const unreadIds = unreadNotifications.map((n) => n.id)
+    if (unreadIds.length > 0) {
+      await bulkMarkRead(unreadIds)
+    }
+  }
 
   return (
     <details className="notification-center">
@@ -22,7 +31,19 @@ export const NotificationCenter: React.FC = () => {
         {unreadCount > 0 && <span className="notification-count">{unreadCount}</span>}
       </summary>
       <div className="notification-popover">
-        <h2>Notifications</h2>
+        <div className="notification-header">
+          <h2>Notifications</h2>
+          {unreadCount > 0 && (
+            <button
+              onClick={handleMarkAllAsRead}
+              className="mark-all-read-btn"
+              aria-label="Mark all notifications as read"
+              title="Mark all as read"
+            >
+              <CheckCheck size={16} />
+            </button>
+          )}
+        </div>
         {notifications.length === 0 ? (
           <p className="notification-empty">No notifications</p>
         ) : (

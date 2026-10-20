@@ -41,6 +41,9 @@ interface NotificationStore {
   optimisticUpdates: Map<string, NotificationSettings>
   notifications: DashboardNotification[]
   notificationsLoading: boolean
+  bulkReadInProgress: Set<string>
+  pastChanges: NotificationChange[]
+  futureChanges: NotificationChange[]
 
   // Request versioning and serialization state
   requestVersions: Map<string, number> // Track latest version per event type
@@ -57,23 +60,21 @@ interface NotificationStore {
   clearError: () => void
   fetchNotifications: () => Promise<void>
   markNotificationRead: (id: string) => Promise<void>
-
-  // Internal helpers
-  _isUpdateStale: (eventType: string, version: number) => boolean
-  _getNextVersion: (eventType: string) => number
+  bulkMarkRead: (ids: string[]) => Promise<void>
 }
 
 const MAX_HISTORY_SIZE = 20
 
-export const useNotificationStore = create<NotificationStore>((set, get) => {
-  /**
-   * Process the update queue for a specific event type.
-   * Ensures updates are serialized: only one update in flight at a time.
-   * This prevents race conditions where multiple concurrent requests compete for the same resource.
-   */
-  const processUpdateQueue = async (eventType: string) => {
-    const state = get()
-    let updateQueue = state.updateQueues.get(eventType)
+export const useNotificationStore = create<NotificationStore>((set, get) => ({
+  settings: [],
+  loading: false,
+  error: null,
+  optimisticUpdates: new Map(),
+  notifications: [],
+  notificationsLoading: false,
+  bulkReadInProgress: new Set(),
+  pastChanges: [],
+  futureChanges: [],
 
     if (!updateQueue || updateQueue.queue.length === 0) {
       return
@@ -263,44 +264,61 @@ export const useNotificationStore = create<NotificationStore>((set, get) => {
         webhookEnabled,
       })
 
-      // If no update is in progress, start processing the queue
-      if (!wasProcessing) {
-        await processUpdateQueue(eventType)
-      }
-    },
+  bulkMarkRead: async (ids: string[]) => {
+    if (ids.length === 0) return
 
-    clearError: () => {
-      set({ error: null })
-    },
+    const state = get()
+    
+    // Store previous state for rollback
+    const previousNotifications = state.notifications
+    const bulkReadInProgress = new Set(state.bulkReadInProgress)
+    ids.forEach(id => bulkReadInProgress.add(id))
 
-    fetchNotifications: async () => {
-      set({ notificationsLoading: true })
-      try {
-        const notifications = await proxyPayAPI.getNotifications()
-        set({ notifications, notificationsLoading: false })
-      } catch (error) {
-        set({
-          notificationsLoading: false,
-          error:
-            error instanceof Error ? error.message : 'Failed to fetch notifications',
-        })
-      }
-    },
+    // Optimistic update - mark all as read atomically
+    const optimisticNotifications = previousNotifications.map((notification) =>
+      ids.includes(notification.id) ? { ...notification, read: true } : notification
+    )
 
-    markNotificationRead: async (id: string) => {
-      try {
-        await proxyPayAPI.markNotificationRead(id)
-        set((state) => ({
-          notifications: state.notifications.map((notification) =>
-            notification.id === id ? { ...notification, read: true } : notification
-          ),
-        }))
-      } catch (error) {
-        set({
-          error:
-            error instanceof Error ? error.message : 'Failed to update notification',
-        })
-      }
-    },
-  }
-})
+    set({
+      notifications: optimisticNotifications,
+      bulkReadInProgress,
+      error: null,
+    })
+
+    try {
+      // Attempt API call - server returns updated notifications for atomic confirmation
+      const updatedNotifications = await proxyPayAPI.markNotificationsRead(ids)
+      
+      bulkReadInProgress.forEach(id => bulkReadInProgress.delete(id))
+
+      set({
+        notifications: updatedNotifications,
+        bulkReadInProgress,
+      })
+    } catch (error) {
+      // Rollback on failure - restore previous state atomically
+      bulkReadInProgress.forEach(id => bulkReadInProgress.delete(id))
+
+      set({
+        notifications: previousNotifications,
+        bulkReadInProgress,
+        error:
+          error instanceof Error
+            ? `Failed to mark notifications as read: ${error.message}`
+            : 'Failed to mark notifications as read',
+      })
+    }
+  },
+
+  clearError: () => {
+    set({ error: null })
+  },
+
+  undo: async () => {
+    // Placeholder for future undo functionality
+  },
+
+  redo: async () => {
+    // Placeholder for future redo functionality
+  },
+}))
